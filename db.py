@@ -2,10 +2,10 @@ import asyncpg
 from aiogram import types
 
 DB_CONFIG = {
-    "user": "postgres",
-    "password": "Alik220407",
+    "user": "soulemesh_user",
+    "password": "8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7",
     "database": "soulemesh",
-    "host": "localhost",
+    "host": "dpg-d15jtare5dus739ot2ig-a",
     "port": "5432"
 }
 
