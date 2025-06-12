@@ -3,3 +3,5 @@ apify-client
 requests
 pybase64
 aiogram
+asyncpg
+databases
