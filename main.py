@@ -61,7 +61,6 @@ async def info(message: Message):
     total_messages = await get_user_message_count(pool, message.from_user.id)
     await message.answer(
         f"SOULeMESH — анонимный бот для душевных разговоров.\n"
-        f"Вы отправили {total_messages} сообщений.\n\n"
         f"ИИ в будущем будет подбирать собеседников по интересам и психотипу."
     )
 
@@ -116,13 +115,43 @@ async def stop(message: Message):
         await increment_full_chats(pool, partner_id)
 
         await bot.send_message(partner_id, "Собеседник завершил с вами диалог 😞\nНапишите /search чтобы найти следующего.", reply_markup=main_menu)
-
-    await message.answer("Вы завершили диалог.", reply_markup=main_menu)
+        await message.answer("Вы завершили диалог.", reply_markup=main_menu)
+    else:
+        await message.answer("❗ У вас нет активного диалога.", reply_markup=main_menu)
 
 @dp.message(Command("next"))
 async def next_chat(message: Message):
-    await stop_chat(message)
+    user_id = message.from_user.id
+
+    if user_id in active_chats:
+        await stop(message)
+
     await start_search(message)
+
+
+@dp.message(Command("me"))
+async def me(message: Message):
+    user_id = message.from_user.id
+    info = await get_user_info(pool, user_id)
+    total_messages = await get_user_message_count(pool, user_id)
+
+    if info:
+        username = info.get("username") or "—"
+        first_name = info.get("first_name") or "—"
+        last_name = info.get("last_name") or "—"
+        full_chats = info.get("full_chats", 0)
+
+        await message.answer(
+            f"<b>🧾 Ваша статистика:</b>\n\n"
+            f"🆔 ID: <code>{user_id}</code>\n"
+            f"👤 Username: @{username}\n"
+            f"📛 Имя: {first_name} {last_name}\n\n"
+            f"💬 Сообщений отправлено: <b>{total_messages}</b>\n"
+            f"📨 Завершённых диалогов: <b>{full_chats}</b>"
+        )
+    else:
+        await message.answer("Пользователь не найден в базе данных.")
+
 
 @dp.message(F.content_type.in_({"text", "sticker", "photo", "animation", "voice", "audio", "video", "document"}))
 async def relay_message(message: Message):
@@ -147,7 +176,8 @@ async def setup_bot_commands():
         BotCommand(command="search", description="Найти собеседника"),
         BotCommand(command="stop", description="Завершить чат"),
         BotCommand(command="next", description="Следующий собеседник"),
-        BotCommand(command="info", description="О боте")
+        BotCommand(command="info", description="О боте"),
+        BotCommand(command="me", description="Ваша статистика")
     ])
 
 async def main():
