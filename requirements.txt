@@ -1,5 +1,5 @@
-pip install openai
-pip install apify-client
-pip install requests
-pip install pybase64
-pip install aiogram
+openai
+apify-client
+requests
+pybase64
+aiogram
