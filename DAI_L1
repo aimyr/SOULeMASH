@@ -3,10 +3,14 @@ from typing import Dict, List, Optional
 
 from apify_client import ApifyClient
 from openai import OpenAI
+from pathlib import Path
+import requests, tempfile
+import json, re
+
 
 # ==================== KEYS & CLIENTS ====================
-APIFY_TOKEN     = os.getenv("APIFY_TOKEN",  "your_apify_token_here")
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "your_openai_key_here")
+APIFY_TOKEN     = os.getenv("APIFY_TOKEN",  "apify_api_RAgg1rLfDSMylWYQT2jUotIVsdWVyZ1jRj1P")
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-5XBRs-SSoSScHCXPeRij8JvO_KXHT2mc_Y6n0e7M7qT3BlbkFJvyiweBPGWuzj_fLKGCPw8eKnVN2Scd5gUW7NLaEycA")
 
 apify  = ApifyClient(APIFY_TOKEN)
 openai = OpenAI(api_key=OPENAI_API_KEY)
@@ -17,13 +21,12 @@ ITEM_PROMPT = (
     "- Интересы\n- Тип личности (MBTI / Big Five)\n- Склонность к диалогу\n- Ценности\n"
     "Отвечай структурировано ровно этими четырьмя пунктами."
 )
-
 SUMMARY_PROMPT = (
     "Ты — эксперт-психолог и культуролог. Используй:\n"
     "1) Анализы контента соцсетей (ниже «Анализы»)\n"
     "2) Ответы пользователя на опрос (ниже «Опрос»)\n\n"
-    "Сформируй JSON-объект user_traits ровно следующей структуры — без лишних полей и комментариев:\n\n"
-    "{\n"
+    "Сформируй JSON-объект user_traits ровно следующей структуры:\n\n"
+    "{{\n"
     '  "extraversion": <0-1>,\n'
     '  "agreeableness": <0-1>,\n'
     '  "openness": <0-1>,\n'
@@ -33,7 +36,7 @@ SUMMARY_PROMPT = (
     '  "aggression_toxicity": <0-1>,\n'
     '  "dominance": <0-1>,\n'
     '  "warmth_affiliation": <0-1>,\n'
-    '  "values": {\n'
+    '  "values": {{\n'
     '    "universalism": <0-1>,\n'
     '    "self_direction": <0-1>,\n'
     '    "stimulation": <0-1>,\n'
@@ -44,18 +47,41 @@ SUMMARY_PROMPT = (
     '    "tradition": <0-1>,\n'
     '    "conformity": <0-1>,\n'
     '    "security": <0-1>\n'
-    '  },\n'
-    '  "interests": {\n'
+    '  }},\n'
+    '  "interests": {{\n'
     '    "Movies": <0-1>, "Music": <0-1>, "Books": <0-1>, "Travel": <0-1>, "Business": <0-1>,\n'
     '    "Psychology": <0-1>, "Technology": <0-1>, "Sports": <0-1>, "Fashion": <0-1>, "Mindfulness": <0-1>\n'
-    '  },\n'
+    '  }},\n'
     '  "languages": ["ru","kz","en"],\n'
     '  "timezone": "Asia/Almaty",\n'
     '  "preferred_format": "text"\n'
-    "}\n\n"
+    "}}\n\n"
     "Выведи только валидный JSON без пояснений.\n\n"
     "Анализы:\n{analyses}\n\nОпрос:\n{survey}"
 )
+
+def _safe_json_loads(raw: str):
+    """
+    Пытается извлечь JSON-объект из строки, даже если вокруг лишний текст
+    или ```json … ```-кодовая ограда.
+    """
+    raw = raw.strip()
+
+    # убираем ```json … ``` или ``` … ```
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z0-9]*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+
+    # пробуем напрямую
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # ищем первую/последнюю фигурные скобки
+        match = re.search(r"\{.*\}", raw, re.S)
+        if match:
+            return json.loads(match.group(0))
+        raise  # если ничего не помогает — пробрасываем ошибку
+
 
 # ==================== LOW-LEVEL ANALYSERS ====================
 def _gpt_analyze_text(text: str) -> str:
@@ -77,12 +103,20 @@ def _gpt_analyze_image(url: str) -> str:
     )
     return resp.choices[0].message.content.strip()
 
-def _download(url: str, path: str) -> str:
+
+def _download(url: str, filename: str = None, tmp_dir: str = None) -> Path:
+    if tmp_dir is None:
+        tmp_dir = tempfile.gettempdir()
+    Path(tmp_dir).mkdir(parents=True, exist_ok=True)
+
+    if filename is None:
+        filename = Path(url).name.split("?")[0]
+    filepath = Path(tmp_dir) / filename
+
     r = requests.get(url, timeout=30)
     r.raise_for_status()
-    with open(path, "wb") as f:
-        f.write(r.content)
-    return path
+    filepath.write_bytes(r.content)
+    return filepath          # <-- Path, не str
 
 # ==================== TIKTOK SCRAPER ====================
 def _analyze_tiktok(username: str, n_reposts: int = 3) -> List[str]:
@@ -109,7 +143,7 @@ def _analyze_tiktok(username: str, n_reposts: int = 3) -> List[str]:
     return analyses
 
 # ==================== INSTAGRAM SCRAPER ====================
-def _analyze_instagram(username: str, n_posts: int = 3) -> List[str]:
+def _analyze_instagram(username: str, n_posts: int = 3) -> list[str]:
     run = apify.actor("apify/instagram-scraper").call(run_input={
         "directUrls": [f"https://www.instagram.com/{username}/"],
         "resultsType": "posts",
@@ -126,46 +160,61 @@ def _analyze_instagram(username: str, n_posts: int = 3) -> List[str]:
             analyses.append(_gpt_analyze_text(caption))
 
         if item.get("displayUrl") and not item.get("isVideo", False):
-            url  = item["displayUrl"]
-            path = _download(url, f"/tmp/{item['id']}.jpg")
-            with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
+            img_url  = item["displayUrl"]
+            tmp_path = _download(img_url, f"{item['id']}.jpg")   # теперь создаётся корректный путь
+            b64      = base64.b64encode(tmp_path.read_bytes()).decode()
             analyses.append(_gpt_analyze_image(f"data:image/jpeg;base64,{b64}"))
     return analyses
 
+
 # ==================== MAIN ENTRY ====================
 def build_user_traits(
-    tiktok_username: Optional[str] = None,
-    instagram_username: Optional[str] = None,
-    survey_answers: Dict = None,
-    n_items: int = 3
-) -> Dict:
-    all_analyses: List[str] = []
+    tiktok_username: str | None = None,
+    instagram_username: str | None = None,
+    survey_answers: dict | None = None,
+    n_items: int = 3,
+):
+    all_analyses = []
 
     if tiktok_username:
         all_analyses += _analyze_tiktok(tiktok_username, n_items)
-
     if instagram_username:
         all_analyses += _analyze_instagram(instagram_username, n_items)
 
-    survey_json = json.dumps(survey_answers or {}, ensure_ascii=False, indent=2)
     summary_prompt = SUMMARY_PROMPT.format(
-        analyses="\n\n".join(all_analyses) if all_analyses else "—",
-        survey=survey_json
+        analyses="\n\n".join(all_analyses) or "—",
+        survey=json.dumps(survey_answers or {}, ensure_ascii=False, indent=2),
     )
 
     resp = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "system", "content": "Сформируй user_traits."},
-                  {"role": "user",   "content": summary_prompt}]
+        messages=[
+            {"role": "system", "content": "Сформируй user_traits."},
+            {"role": "user", "content": summary_prompt},
+        ],
     )
-    return json.loads(resp.choices[0].message.content)
 
+    # ← безопасно достаём JSON
+    return _safe_json_loads(resp.choices[0].message.content)
 # ==================== EXAMPLE USAGE ====================
 if __name__ == "__main__":
     survey = {
-        "q1": 1, "q2": 2, "q3": 1, "q4": [1,2,3,5], "q5": "редко",
-        # … остальные ответы …
+        "q1": 1,
+        "q2": 2,
+        "q3": 1,
+        "q4": 1,                       # если нужен один ответ, иначе сделайте список
+        "q5": "часто нервничаю",
+        "q6": 2,
+        "q7": 1,
+        "q8": 1,
+        "q9": 1,
+        "q10": 1,
+        "q11": 1,
+        "q12": 1,
+        "q13": [1, 2, 3, 5, 7],        # добавили «:» и список
+        "q14": "днем",
+        "q15": 1
+    # остальные ответы добавляйте ниже без комментариев
     }
 
     traits = build_user_traits(
