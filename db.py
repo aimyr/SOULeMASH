@@ -1,6 +1,7 @@
 import asyncpg
-from aiogram import types
 import json
+from aiogram import types
+
 
 DB_CONFIG = {
     "user": "soulemesh_user",
