@@ -20,7 +20,7 @@ from db import (
 )
 
 
-DATABASE_URL = "postgresql://postgres:Alik220407@localhost:5432/soulemesh"
+DATABASE_URL = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
