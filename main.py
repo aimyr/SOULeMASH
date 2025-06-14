@@ -20,7 +20,7 @@ from db import (
 )
 
 
-DATABASE_URL = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
+DATABASE_URL = "postgresql://postgres:Alik220407@localhost:5432/soulemesh"
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -254,12 +254,12 @@ async def handle_question(message: Message, state: FSMContext):
     # сохраняем ответ
     await state.update_data({f"q{state_index + 1}": message.text})
 
-
-    # если это был последний вопрос
     if state_index + 1 >= len(questions):
         # сохраняем пока что все ответы (без соцсети)
         data = await state.get_data()
         await save_user_profile(pool, message.from_user.id, data)
+
+        # переходим к доп. вопросу
         await state.set_state(Questionnaire.social_select)
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -271,12 +271,13 @@ async def handle_question(message: Message, state: FSMContext):
         )
         await message.answer("🔥 Хочешь добавить свою соцсеть?\nВыбери одну:", reply_markup=keyboard)
 
-
+        return
     else:
         # переход к следующему вопросу
         await state.set_state(getattr(Questionnaire, f"q{state_index + 2}"))
         qtext, opts = questions[state_index + 1]
         await message.answer(format_question(questions[state_index + 1]))
+
 @dp.callback_query(F.data.startswith("social_"), StateFilter(Questionnaire.social_select))
 async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
     social_type = callback.data.split("_")[1]  # 'instagram' или 'tiktok'
@@ -286,6 +287,30 @@ async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup()
     await callback.message.answer(f"🔗 Введи свой @{social_type} ник (начинай с @):")
     await callback.answer()
+@dp.message(StateFilter(Questionnaire.social_input))
+async def handle_social_input(message: Message, state: FSMContext):
+    data = await state.get_data()
+    social_type = data.get("social_type")
+    username = message.text.strip()
+
+    if not username.startswith("@"):
+        await message.answer("⚠️ Пожалуйста, начни ник с @")
+        return
+
+    value = f"{social_type}: {username}"
+
+    conn = await pool.acquire()
+    async with conn.transaction():
+        await conn.execute(
+            "UPDATE user_profiles SET social = $1 WHERE user_id = $2",
+            value,
+            message.from_user.id
+        )
+    await pool.release(conn)
+
+    await state.clear()
+    await message.answer("Спасибо! 🎉 Всё сохранено.\nТеперь нажми /search, чтобы найти собеседника.", reply_markup=main_menu)
+
 
 # Главное меню
 main_menu = ReplyKeyboardMarkup(
