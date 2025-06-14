@@ -5,4 +5,3 @@ pybase64
 aiogram
 asyncpg
 databases
-json
