@@ -1,8 +1,11 @@
 import logging
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BotCommand
+from aiogram import Bot, Dispatcher, F, types, Router
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, \
+    KeyboardButton, ReplyKeyboardRemove, BotCommand
 from aiogram.enums import ParseMode
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 from aiogram.client.default import DefaultBotProperties
 from config import BOT_TOKEN
 from db import (
@@ -11,22 +14,278 @@ from db import (
     increment_messages,
     increment_full_chats,
     get_user_message_count,
-    get_user_info
+    get_user_info,
+    user_has_profile,
+    save_user_profile
 )
 
 
 DATABASE_URL = "postgresql://postgres:Alik220407@localhost:5432/soulemesh"
 
-# Бот и диспетчер
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 logging.basicConfig(level=logging.WARNING)
 pool = None
+# перед запуском бота
 
-# Состояния
+
 searching = set()
 active_chats = {}
 message_counts = {}
+
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
+    resize_keyboard=True
+)
+search_menu = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="/stopsearch")]],
+    resize_keyboard=True
+)
+class Questionnaire(StatesGroup):
+    intro = State()
+    q1 = State()
+    q2 = State()
+    q3 = State()
+    q4 = State()
+    q5 = State()
+    q6 = State()
+    q7 = State()
+    q8 = State()
+    q9 = State()
+    q10 = State()
+    q11 = State()
+    q12 = State()
+    q13 = State()
+    q14 = State()
+    q15 = State()
+    completed = State()
+    social_select = State()  # выбор соцсети
+    social_input = State()  # ввод ника
+
+
+
+
+
+
+router = Router()
+
+
+def inline_yes_no():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Да", callback_data="start_questionnaire")],
+        [InlineKeyboardButton(text="Нет", callback_data="deny_questionnaire")]
+    ])
+
+questions = [
+    (
+        "Что тебе ближе? (можешь отвечать своими словами! )",
+        [
+            "Быть в центре внимания",
+            "Сидеть в сторонке и наблюдать"
+        ]
+    ),
+    (
+        "Когда кто-то грустит, ты:",
+        [
+            "Сильно сопереживаешь",
+            "Пропускаешь мимо"
+        ]
+    ),
+    (
+        "Как ты относишься к новым идеям?",
+        [
+            "Обожаю экспериментировать",
+            "Предпочитаю проверенное"
+        ]
+    ),
+    (
+        "Ты скорее:",
+        [
+            "Всё планируешь заранее",
+            "Делаешь на ходу"
+        ]
+    ),
+    (
+        "Насколько ты тревожный?",
+        [
+            "Часто нервничаю",
+            "Почти всегда спокоен"
+        ]
+    ),
+    (
+        "Что для тебя важнее:",
+        [
+            "Семья, традиции",
+            "Свобода, приключения"
+        ]
+    ),
+    (
+        "Ради успеха ты:",
+        [
+            "Готов на жертвы",
+            "Не гонюсь за победой"
+        ]
+    ),
+    (
+        "К чужим культурам ты:",
+        [
+            "Интересно узнать",
+            "Иногда раздражает"
+        ]
+    ),
+    (
+        "Как общаешься?",
+        [
+            "Легко рассказываю",
+            "Не делюсь личным"
+        ]
+    ),
+    (
+        "Что ближе?",
+        [
+            "Быть ведущим",
+            "Подстраиваться"
+        ]
+    ),
+    (
+        "Как шутишь?",
+        [
+            "С иронией и сарказмом",
+            "Осторожно или редко"
+        ]
+    ),
+    (
+        "Какие у тебя сферы интересов?",
+        [
+            "Наука и технологии",
+            "Арт, музыка"
+        ]
+    ),
+    (
+        "Выбери 3 темы:",
+        [
+            "Фильмы",
+            "Музыка",
+            "Книги",
+            "Тревел",
+            "Бизнес",
+            "Психология",
+            "Технологии",
+            "Спорт",
+            "Мода",
+            "Осознанность"
+        ]
+    ),
+    (
+        "Когда ты предпочитаешь общаться?",
+        [
+            "Днём",
+            "Ночью"
+        ]
+    ),
+    (
+        "Каким хочешь видеть собеседника?",
+        [
+            "Похожим на себя",
+            "Противоположным",
+            "Главное — интересный"
+        ]
+    ),
+]
+
+
+def format_question(question: tuple[str, list[str]]) -> str:
+    qtext, options = question
+    formatted = f"{qtext}\n\n"
+    for i , opt in enumerate(options):
+        formatted += f"{i + 1}. {opt}\n"
+
+    if len(options) <= 3:
+        formatted += "\n💬 Напиши, какой вариант тебе ближе — можешь выбрать 1/2 или описать своими словами"
+    else:
+        formatted += "\n💬 Напиши, какие темы тебе ближе — можешь выбрать цифры или описать своими словами"
+
+    return formatted.strip()
+
+@dp.message(Command("start"))
+async def cmd_start(message: Message, state: FSMContext):
+    await state.clear()
+    await register_user(pool, message.from_user)
+    has_profile = await user_has_profile(pool, message.from_user.id)
+    first_name = message.from_user.first_name or "друг"
+
+    if not has_profile:
+        await message.answer(
+            f"Привет, {first_name} 👋\n\nДобро пожаловать в <b>SOULeMESH</b> — пространство душевных связей.\n\nНаш ИИ может лучше подбирать собеседников, если ты пройдёшь короткую анкету. Пройти сейчас?",
+            reply_markup=inline_yes_no()
+        )
+        await state.set_state(Questionnaire.intro)
+        return
+
+    await message.answer(
+        f"Привет, {first_name}! 👋\n\nДобро пожаловать в <b>SOULeMESH</b> — пространство, где создаются душевные связи.\nНажми /search, чтобы найти собеседника.\n\nhttps://t.me/soulemesh_bot",
+        reply_markup=main_menu
+    )
+
+
+@dp.callback_query(F.data == "deny_questionnaire")
+async def deny_questionnaire(callback: CallbackQuery, state: FSMContext):
+    await state.update_data({"denied": True})
+    await callback.message.edit_text(
+        "😔 Без анкеты ты не сможешь пользоваться ботом. Напиши /start, чтобы вернуться."
+    )
+    await callback.answer()  # ✅ Telegram ждёт это, чтобы убрать "загрузку"
+
+@dp.callback_query(F.data == "start_questionnaire")
+async def on_start_questionnaire(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(Questionnaire.q1)
+    await callback.message.edit_text(format_question(questions[0]))
+
+
+@dp.message(StateFilter(Questionnaire.q1, Questionnaire.q2, Questionnaire.q3, Questionnaire.q4, Questionnaire.q5,
+                        Questionnaire.q6, Questionnaire.q7, Questionnaire.q8, Questionnaire.q9, Questionnaire.q10,
+                        Questionnaire.q11, Questionnaire.q12, Questionnaire.q13, Questionnaire.q14, Questionnaire.q15))
+async def handle_question(message: Message, state: FSMContext):
+    current_state = await state.get_state()
+    state_name = current_state.split(":")[1]  # например, 'q1'
+    state_index = int(state_name[1:]) - 1     # преобразуем 'q1' → 0, 'q2' → 1 и т.д.
+
+
+    # сохраняем ответ
+    await state.update_data({f"q{state_index + 1}": message.text})
+
+
+    # если это был последний вопрос
+    if state_index + 1 >= len(questions):
+        # сохраняем пока что все ответы (без соцсети)
+        data = await state.get_data()
+        await save_user_profile(pool, message.from_user.id, data)
+        await state.set_state(Questionnaire.social_select)
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="📸 Instagram", callback_data="social_instagram"),
+                    InlineKeyboardButton(text="🎵 TikTok", callback_data="social_tiktok")
+                ]
+            ]
+        )
+        await message.answer("🔥 Хочешь добавить свою соцсеть?\nВыбери одну:", reply_markup=keyboard)
+
+
+    else:
+        # переход к следующему вопросу
+        await state.set_state(getattr(Questionnaire, f"q{state_index + 2}"))
+        qtext, opts = questions[state_index + 1]
+        await message.answer(format_question(questions[state_index + 1]))
+@dp.callback_query(F.data.startswith("social_"), StateFilter(Questionnaire.social_select))
+async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
+    social_type = callback.data.split("_")[1]  # 'instagram' или 'tiktok'
+    await state.update_data(social_type=social_type)
+    await state.set_state(Questionnaire.social_input)
+
+    await callback.message.edit_reply_markup()
+    await callback.message.answer(f"🔗 Введи свой @{social_type} ник (начинай с @):")
+    await callback.answer()
 
 # Главное меню
 main_menu = ReplyKeyboardMarkup(
@@ -45,16 +304,6 @@ search_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-@dp.message(Command("start"))
-async def start(message: Message):
-    await message.answer(
-        "Привет! 👋\n\n"
-        "Добро пожаловать в <b>SOULeMESH</b> — пространство, где создаются душевные связи.\n"
-        "Нажми /search, чтобы найти собеседника.\n\n"
-        "https://t.me/soulemesh_bot",
-        reply_markup=main_menu
-    )
-    await register_user(pool, message.from_user)
 
 @dp.message(Command("info"))
 async def info(message: Message):
@@ -65,9 +314,14 @@ async def info(message: Message):
     )
 
 @dp.message(Command("search"))
-async def start_search(message: Message):
-    user_id = message.from_user.id
+async def start_search(message: Message, state: FSMContext):  # ✅ добавили state
+    user_id = message.from_user.id  # ✅ обязательно
+    user_data = await state.get_data()  # теперь работает
 
+    if user_data.get("denied"):
+        await message.answer(
+            "❌ Ты отказался от анкеты и не можешь пользоваться этой командой. Напиши /start, чтобы вернуться.")
+        return
     if user_id in active_chats:
         await message.answer("❗ Вы уже в чате. Используйте /next или /stop.")
         return
@@ -76,6 +330,12 @@ async def start_search(message: Message):
         await message.answer("⏳ Вы уже ищете собеседника.")
         return
 
+
+        # здесь может быть проверка профиля из БД, если хочешь:
+    has_profile = await user_has_profile(pool, message.from_user.id)
+    if not has_profile:
+        await message.answer("❗️Ты не прошёл анкету. Напиши /start, чтобы пройти её.")
+        return
     searching.add(user_id)
     await message.answer("🔍 Ищем собеседника...", reply_markup=search_menu)
 
@@ -120,15 +380,24 @@ async def stop(message: Message):
         await message.answer("❗ У вас нет активного диалога.", reply_markup=main_menu)
 
 @dp.message(Command("next"))
-async def next_chat(message: Message):
+async def next_chat(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    user_data = await state.get_data()  # ✅ Вот этого не хватает
+    if user_data.get("denied"):
+        await message.answer(
+            "❌ Ты отказался от анкеты и не можешь пользоваться этой командой. Напиши /start, чтобы вернуться.")
+        return
+
+        # здесь может быть проверка профиля из БД, если хочешь:
+    has_profile = await user_has_profile(pool, message.from_user.id)
+    if not has_profile:
+        await message.answer("❗️Ты не прошёл анкету. Напиши /start, чтобы пройти её.")
+        return
 
     if user_id in active_chats:
         await stop(message)
 
     await start_search(message)
-
-
 @dp.message(Command("me"))
 async def me(message: Message):
     user_id = message.from_user.id
@@ -140,18 +409,24 @@ async def me(message: Message):
         first_name = info.get("first_name") or "—"
         last_name = info.get("last_name") or "—"
         full_chats = info.get("full_chats", 0)
+        social = info.get("social")
+
+        if social:
+            social_text = f"🔗 Соцсеть: <code>{social}</code>\n"
+        else:
+            social_text = "🔗 Соцсеть: <i>не указана</i>\n"
 
         await message.answer(
             f"<b>🧾 Ваша статистика:</b>\n\n"
             f"🆔 ID: <code>{user_id}</code>\n"
             f"👤 Username: @{username}\n"
-            f"📛 Имя: {first_name} {last_name}\n\n"
+            f"📛 Имя: {first_name} {last_name}\n"
+            f"{social_text}\n"
             f"💬 Сообщений отправлено: <b>{total_messages}</b>\n"
             f"📨 Завершённых диалогов: <b>{full_chats}</b>"
         )
     else:
         await message.answer("Пользователь не найден в базе данных.")
-
 
 @dp.message(F.content_type.in_({"text", "sticker", "photo", "animation", "voice", "audio", "video", "document"}))
 async def relay_message(message: Message):
@@ -190,4 +465,3 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     import asyncio
     asyncio.run(main())
-
