@@ -8,7 +8,7 @@ import asyncio, asyncpg, json
 from DAI_L1 import build_user_traits          # ← ваша функция с OpenAI/Apify
 # ────────────────────────────  конфиг  ────────────────────────────
 DB_DSN          = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
-SOURCE_TABLE    = "profiles"
+SOURCE_TABLE    = "user_profiles"
 TARGET_TABLE    = "user_embeddings"
 CHANNEL         = "profile_change"
 # ───────────────────────────────────────────────────────────────────
