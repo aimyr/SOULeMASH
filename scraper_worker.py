@@ -1,7 +1,7 @@
 # scraper_worker.py
 import asyncio, os, json, asyncpg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler   # :contentReference[oaicite:7]{index=7}
-from your_scraper_module import build_user_traits             # ваш код
+from DAI_L1 import build_user_traits             # ваш код
 
 DB_DSN = os.environ["DB_DSN"]
 INTERVAL = int(os.getenv("SCRAPE_EVERY_MIN", 60))
