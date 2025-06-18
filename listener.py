@@ -38,8 +38,7 @@ END$$;
 
 async def bootstrap_schema():
     conn = await asyncpg.connect(DB_DSN)
-    for stmt in filter(None, map(str.strip, DDL.split(';'))):
-        await conn.execute(stmt)
+    await conn.execute(DDL)      # ← заменили цикл split
     await conn.close()
     print("✅ schema & trigger ok")
 
