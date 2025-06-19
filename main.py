@@ -447,7 +447,7 @@ async def start_search(message: Message, state: FSMContext):  # ✅ добави
             await bot.send_message(other_id, text, reply_markup=ReplyKeyboardRemove())
             return
 
-    await message.answer("😔 Пока никого подходящего не найдено. Попробуй позже.")
+    
 
 
 @dp.message(Command("stopsearch"))
