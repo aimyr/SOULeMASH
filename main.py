@@ -34,6 +34,16 @@ pool = None
 searching = set()
 active_chats = {}
 message_counts = {}
+
+
+EXCLUDED_KEYS = {"user_id", "updated_at", "timezone", "languages", "preferred_format", "values", "interests"}
+def is_number(s):
+    try:
+        float(s)
+        return True
+    except (ValueError, TypeError):
+        return False
+
 # Расчёт косинусного сходства
 async def calculate_similarity(pool, user_id):
     async with pool.acquire() as conn:
