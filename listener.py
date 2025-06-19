@@ -77,7 +77,7 @@ async def on_notify(_, __, ___, payload: str):
         # ─── фильтр: нужно хотя бы одно непустое имя ───
         tiktok    = src.get("tiktok")
         instagram = src.get("instagram")
-        if not (tiktok and tiktok.strip()) and not (instagram and instagram.strip()):
+        if not (tiktok and tiktok.strip()) or not (instagram and instagram.strip()):
             # оба пустые → ничего не делаем
             return
 
