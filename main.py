@@ -44,7 +44,11 @@ async def calculate_similarity(pool: Pool, user_id: int) -> tuple[int, float] | 
         if not my_row:
             return None
 
-        my_vector = np.array([float(v) for k, v in my_row.items() if k not in ("user_id", "updated_at")])
+        my_vector = np.array([
+    float(v) for k, v in my_row.items()
+    if k not in ("user_id", "updated_at") and isinstance(v, (int, float, str))
+])
+
 
         # Получаем всех остальных пользователей, кто в поиске
         other_rows = await conn.fetch("""
