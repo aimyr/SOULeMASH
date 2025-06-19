@@ -226,8 +226,34 @@ def build_user_traits(
         ],
     )
 
-    # ← безопасно достаём JSON
-    return _safe_json_loads(resp.choices[0].message.content)
+    
+        # ← безопасно достаём JSON
+    traits = _safe_json_loads(resp.choices[0].message.content)
+
+    # ---------- раскладываем values и interests ----------
+    values     = traits.pop("values",     {}) or {}
+    interests  = traits.pop("interests",  {}) or {}
+
+    # ключи интересов делаем строчными (Movies → movies)
+    interests  = {k.lower(): v for k, v in interests.items()}
+
+    traits.update(values)
+    traits.update(interests)
+
+    # ---------- ставим нули, если GPT не вернул поле ----------
+    FULL_KEYS = [
+        "extraversion","agreeableness","openness","conscientiousness","neuroticism",
+        "empathy","aggression_toxicity","dominance","warmth_affiliation",
+        "universalism","self_direction","stimulation","achievement","power",
+        "hedonism","benevolence","tradition","conformity","security",
+        "movies","music","books","travel","business",
+        "psychology","technology","sports","fashion","mindfulness"
+    ]
+    for k in FULL_KEYS:
+        traits.setdefault(k, 0.0)
+
+    # ---------- вернём плоский dict ----------
+    return traits
 # ==================== EXAMPLE USAGE ====================
 if __name__ == "__main__":
     survey = {
