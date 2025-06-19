@@ -67,20 +67,26 @@ async def bootstrap_schema():
     print("✅ trigger ready")
 
 # ---------- обработчик NOTIFY ----------
+
 async def on_notify(_, __, ___, payload: str):
     user_id = int(payload)
+
     async with pool.acquire() as c:
-        src = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
+        src = await c.fetchrow(
+            f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id
+        )
         if not src:
             return
 
-        # ─── фильтр: нужно хотя бы одно непустое имя ───
-        tiktok    = src.get("tiktok")
-        instagram = src.get("instagram")
-        if not (tiktok and tiktok.strip()) or not (instagram and instagram.strip()):
-            # оба пустые → ничего не делаем
+        # берём логины
+        tiktok    = src.get("tiktok") or ""
+        instagram = src.get("instagram") or ""
+
+        # оба пустые? – тогда ничего не делаем
+        if not tiktok.strip() and not instagram.strip():
             return
 
+        # строим профиль
         traits = build_user_traits(
             tiktok_username    = tiktok,
             instagram_username = instagram,
@@ -88,12 +94,13 @@ async def on_notify(_, __, ___, payload: str):
             n_items            = 3,
         )
 
-        # формируем args в нужном порядке
-        args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
+        # подготавливаем значения строго в нужном порядке
+        args = [user_id] + [traits.get(col, 0.0) for col in NUM_COLS] + [
             traits.get("languages", []),
             traits.get("timezone"),
             traits.get("preferred_format"),
         ]
+
         await c.execute(UPSERT_SQL, *args)
         print(f"🔄 embeddings upserted for {user_id}")
 
