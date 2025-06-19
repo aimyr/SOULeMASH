@@ -73,49 +73,42 @@ async def bootstrap_schema():
 
 # -------------------- DEBUG LISTENER --------------------
 async def on_notify(_, __, ___, payload: str):
-    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    print(f"\n[{ts}] 🔔 NOTIFY payload={payload}")
-    try:
-        user_id = int(payload)
+    user_id = int(payload)
 
-        async with pool.acquire() as c:
-            src = await c.fetchrow(
-                f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id
-            )
-            if not src:
-                print(f"  ⤬ no row with user_id={user_id}")
-                return
+    async with pool.acquire() as c:
+        src = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
+        if not src:
+            return
 
-            print(f"  → row fetched; keys={list(src.keys())}")
-            tiktok    = (src.get('tiktok')    or '').strip()
-            instagram = (src.get('instagram') or '').strip()
-            print(f"    tiktok='{tiktok}'  instagram='{instagram}'")
+        # ---- извлекаем соц-логины ----
+        social = src.get("social") or {}            # ← JSONB колонка
+        if isinstance(social, str):
+            import json as _json
+            social = _json.loads(social)            # если хранится как TEXT
 
-            if not tiktok and not instagram:
-                print("  ⤬ both socials empty — skip")
-                return
+        tiktok    = (social.get("tiktok")    or "").strip()
+        instagram = (social.get("instagram") or "").strip()
+        print(f"    tiktok='{tiktok}'  instagram='{instagram}'")
 
-            traits = build_user_traits(
-                tiktok_username    = tiktok,
-                instagram_username = instagram,
-                survey_answers     = src.get("survey"),
-                n_items            = 3,
-            )
-            print(f"  ✔ traits built, sample: "
-                  f"extraversion={traits.get('extraversion')} "
-                  f"movies={traits.get('movies')}")
+        if not tiktok and not instagram:
+            print("  ⤬ both socials empty — skip")
+            return
 
-            args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
-                traits.get("languages", []),
-                traits.get("timezone"),
-                traits.get("preferred_format"),
-            ]
-            await c.execute(UPSERT_SQL, *args)
-            print(f"  ✔ upsert OK for {user_id}")
+        # ---- строим профиль ----
+        traits = build_user_traits(
+            tiktok_username    = tiktok,
+            instagram_username = instagram,
+            survey_answers     = src.get("profile_json"),   # если ответы лежат там
+            n_items            = 3,
+        )
 
-    except Exception as e:
-        print("‼️ exception in on_notify():", e)
-        traceback.print_exc()
+        args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
+            traits.get("languages", []),
+            traits.get("timezone"),
+            traits.get("preferred_format"),
+        ]
+        await c.execute(UPSERT_SQL, *args)
+        print(f"  ✔ upsert OK for {user_id}")
 
 # -------------------- MAIN --------------------
 async def main():
