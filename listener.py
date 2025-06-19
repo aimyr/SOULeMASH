@@ -59,7 +59,7 @@ async def bootstrap_schema():
 
 # -------------------- DEBUG LISTENER --------------------
 async def on_notify(_, __, ___, payload: str):
-    + ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     print(f"\n[{ts}] 🔔 NOTIFY payload={payload}")
     try:
         user_id = int(payload)
