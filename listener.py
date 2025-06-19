@@ -67,40 +67,26 @@ async def bootstrap_schema():
     print("✅ trigger ready")
 
 # ---------- обработчик NOTIFY ----------
-
 async def on_notify(_, __, ___, payload: str):
     user_id = int(payload)
-
     async with pool.acquire() as c:
-        src = await c.fetchrow(
-            f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id
-        )
+        src = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
         if not src:
             return
 
-        # берём логины
-        tiktok    = src.get("tiktok") or ""
-        instagram = src.get("instagram") or ""
-
-        # оба пустые? – тогда ничего не делаем
-        if not tiktok.strip() and not instagram.strip():
-            return
-
-        # строим профиль
         traits = build_user_traits(
-            tiktok_username    = tiktok,
-            instagram_username = instagram,
+            tiktok_username    = src.get("tiktok"),
+            instagram_username = src.get("instagram"),
             survey_answers     = src.get("survey"),
             n_items            = 3,
         )
 
-        # подготавливаем значения строго в нужном порядке
-        args = [user_id] + [traits.get(col, 0.0) for col in NUM_COLS] + [
+        # формируем args в нужном порядке
+        args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
             traits.get("languages", []),
             traits.get("timezone"),
             traits.get("preferred_format"),
         ]
-
         await c.execute(UPSERT_SQL, *args)
         print(f"🔄 embeddings upserted for {user_id}")
 
