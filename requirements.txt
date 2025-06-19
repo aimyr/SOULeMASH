@@ -1,7 +1,8 @@
-openai
-apify-client
-requests
-pybase64
-aiogram
-asyncpg
-databases
+openai==1.88.0            
+apify-client==1.11.0      
+requests==2.32.4          
+pybase64==1.4.1           
+aiogram==3.20.0.post0     
+asyncpg==0.30.0           
+databases==0.9.0         
+numpy==2.3.0  
