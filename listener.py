@@ -2,16 +2,22 @@
 # -*- coding: utf-8 -*-
 """
 user_profiles ──(TRIGGER→ NOTIFY)──▶ listener ──▶ user_embeddings
-DEBUG-версия: много print'ов для Render-логов
 """
+
 import asyncio, asyncpg, json, traceback
 from datetime import datetime, timezone
-from DAI_L1 import build_user_traits
+from functools import partial
+from DAI_L1 import build_user_traits          # ваша heavy-функция
 
+# ---------- моментально выводим все print ----------
+print = partial(print, flush=True)
+
+# ────────── конфиг ──────────
 DB_DSN       = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
 SOURCE_TABLE = "user_profiles"
 TARGET_TABLE = "user_embeddings"
 CHANNEL      = "profile_change"
+# ────────────────────────────
 
 NUM_COLS = [
     "extraversion","agreeableness","openness","conscientiousness","neuroticism",
@@ -33,9 +39,9 @@ DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='{CHANNEL}_trg')
   THEN
-    EXECUTE format(
-     'CREATE TRIGGER {CHANNEL}_trg AFTER INSERT OR UPDATE '
-     'ON {SOURCE_TABLE} FOR EACH ROW EXECUTE FUNCTION notify_profile_change()');
+     EXECUTE format(
+       'CREATE TRIGGER {CHANNEL}_trg AFTER INSERT OR UPDATE '
+       'ON {SOURCE_TABLE} FOR EACH ROW EXECUTE FUNCTION notify_profile_change()');
   END IF;
 END$$;
 """
@@ -50,79 +56,77 @@ def build_upsert_sql() -> str:
 
 UPSERT_SQL = build_upsert_sql()
 
-
+# ---------- bootstrap ----------
 async def bootstrap_schema():
-    try:
-        print("↪ connecting...", flush=True)
-        conn = await asyncpg.connect(DB_DSN)
-        print("✅ connected", flush=True)
+    print("↪ connecting DB")
+    conn = await asyncpg.connect(DB_DSN)
+    print("↪ applying DDL …")
+    await conn.execute(DDL)
+    await conn.close()
+    print("✅ trigger ready")
 
-        print("↪ executing DDL…", flush=True)
-        await conn.execute(DDL)
-        print("✅ DDL done — trigger ready", flush=True)
+# ---------- обработчик NOTIFY ----------
+async def on_notify(_, __, ___, payload: str):
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    print(f"\n[{ts}] 🔔 NOTIFY payload={payload}")
+
+    try:
+        user_id = int(payload)
+        async with pool.acquire() as c:
+            src = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
+            if not src:
+                print("  ⤬ row not found")
+                return
+
+            # --- social JSON (JSONB / TEXT / NULL) -------------
+            raw_social = src.get("social")
+            if raw_social is None:
+                social = {}
+            elif isinstance(raw_social, dict):
+                social = raw_social
+            else:
+                raw_social = raw_social.strip()
+                if not raw_social:
+                    social = {}
+                else:
+                    try:
+                        social = json.loads(raw_social)
+                        if not isinstance(social, dict):
+                            social = {}
+                    except Exception as e:
+                        print("  ⚠️ bad JSON in social:", e)
+                        social = {}
+
+            tiktok    = (social.get("tiktok")    or "").strip()
+            instagram = (social.get("instagram") or "").strip()
+            print(f"    tiktok='{tiktok}'  instagram='{instagram}'")
+
+            if not tiktok and not instagram:
+                print("  ⤬ both socials empty — skip")
+                return
+
+            # --- строим traits ---------------------------------
+            traits = build_user_traits(
+                tiktok_username    = tiktok,
+                instagram_username = instagram,
+                survey_answers     = src.get("profile_json"),
+                n_items            = 3,
+            )
+            print("  ✔ traits built")
+
+            args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
+                traits.get("languages", []),
+                traits.get("timezone"),
+                traits.get("preferred_format"),
+            ]
+            await c.execute(UPSERT_SQL, *args)
+            print(f"  ✔ upsert OK for {user_id}")
 
     except Exception as e:
-        print("‼️ DDL failed:", e, flush=True)
-        import traceback; traceback.print_exc()
-        raise            # чтобы Render пометил деплой «failed»
+        print("‼️ exception:", e)
+        traceback.print_exc()
 
-    finally:
-        if 'conn' in locals():
-            await conn.close()
-
-
-# -------------------- DEBUG LISTENER --------------------
-async def on_notify(_, __, ___, payload: str):
-    user_id = int(payload)
-
-    async with pool.acquire() as c:
-        src = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
-        if not src:
-            return
-
-        # ---- извлекаем соц-логины ----
-    # --- извлекаем соц-логины ---------------------------------
-    raw_social = src.get("social")            # JSONB, TEXT или None
-
-    if raw_social is None:
-        social = {}
-    elif isinstance(raw_social, dict):
-        social = raw_social
-    else:                                     # TEXT/VARCHAR
-        raw_social = raw_social.strip()
-        if raw_social == "":                  # пустая строка
-            social = {}
-        else:
-            try:
-                import json as _json
-                social = _json.loads(raw_social)
-                if not isinstance(social, dict):
-                    social = {}
-            except Exception as e:
-                print("  ⚠️ bad JSON in social:", e)
-                social = {}
-
-    tiktok    = (social.get("tiktok")    or "").strip()
-    instagram = (social.get("instagram") or "").strip()
-    print(f"    tiktok='{tiktok}'  instagram='{instagram}'", flush=True)
-
-        # ---- строим профиль ----
-        traits = build_user_traits(
-            tiktok_username    = tiktok,
-            instagram_username = instagram,
-            survey_answers     = src.get("profile_json"),   # если ответы лежат там
-            n_items            = 3,
-        )
-
-        args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
-            traits.get("languages", []),
-            traits.get("timezone"),
-            traits.get("preferred_format"),
-        ]
-        await c.execute(UPSERT_SQL, *args)
-        print(f"  ✔ upsert OK for {user_id}")
-
-# -------------------- MAIN --------------------
+# ---------- main loop ----------
 async def main():
     await bootstrap_schema()
     global pool
@@ -130,7 +134,7 @@ async def main():
 
     listener = await asyncpg.connect(DB_DSN)
     await listener.add_listener(CHANNEL, on_notify)
-    print(f"👂 LISTEN {CHANNEL}")
+    print("👂 LISTEN", CHANNEL)
 
     while True:
         await asyncio.sleep(3600)
