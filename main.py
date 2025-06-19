@@ -1,3 +1,4 @@
+import numpy as np
 import logging
 from aiogram import Bot, Dispatcher, F, types, Router
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, \
@@ -8,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.client.default import DefaultBotProperties
 from config import BOT_TOKEN
+from asyncpg import Pool
 from db import (
     create_pool,
     register_user,
@@ -32,6 +34,42 @@ pool = None
 searching = set()
 active_chats = {}
 message_counts = {}
+# Расчёт косинусного сходства
+async def calculate_similarity(pool: Pool, user_id: int) -> tuple[int, float] | None:
+    async with pool.acquire() as conn:
+        # Получаем вектор текущего пользователя
+        my_row = await conn.fetchrow("""
+            SELECT * FROM user_embeddings WHERE user_id = $1
+        """, user_id)
+        if not my_row:
+            return None
+
+        my_vector = np.array([float(v) for k, v in my_row.items() if k not in ("user_id", "updated_at")])
+
+        # Получаем всех остальных пользователей, кто в поиске
+        other_rows = await conn.fetch("""
+            SELECT * FROM user_embeddings WHERE user_id != $1
+        """, user_id)
+
+        best_match_id = None
+        best_score = -1
+
+        for row in other_rows:
+            other_vector = np.array([float(v) for k, v in row.items() if k not in ("user_id", "updated_at")])
+            if len(my_vector) != len(other_vector):
+                continue
+
+            # Косинусное сходство
+            dot = np.dot(my_vector, other_vector)
+            norm = np.linalg.norm(my_vector) * np.linalg.norm(other_vector)
+            similarity = dot / norm if norm != 0 else 0
+
+            if similarity > best_score:
+                best_score = similarity
+                best_match_id = row["user_id"]
+
+        return best_match_id, round(best_score * 100, 2) if best_match_id else None
+
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
@@ -364,8 +402,11 @@ async def start_search(message: Message, state: FSMContext):  # ✅ добави
     searching.add(user_id)
     await message.answer("🔍 Ищем собеседника...", reply_markup=search_menu)
 
-    for other_id in list(searching):
-        if other_id != user_id:
+     # Найти наиболее похожего собеседника
+    match = await calculate_similarity(pool, user_id)
+    if match:
+        other_id, score = match
+        if other_id in searching:
             searching.remove(user_id)
             searching.remove(other_id)
 
@@ -374,9 +415,21 @@ async def start_search(message: Message, state: FSMContext):  # ✅ добави
             message_counts[user_id] = 0
             message_counts[other_id] = 0
 
-            await bot.send_message(user_id, "Собеседник найден ✨\n\n/next — следующий\n/stop — закончить", reply_markup=ReplyKeyboardRemove())
-            await bot.send_message(other_id, "Собеседник найден ✨\n\n/next — следующий\n/stop — закончить", reply_markup=ReplyKeyboardRemove())
+            if score < 40:
+                level = "низкая"
+            elif score < 60:
+                level = "средняя"
+            else:
+                level = "высокая"
+
+            text = f"Собеседник найден ✨ (ваша степень схожести: {level}, {score}%)\n\n/next — следующий\n/stop — закончить"
+
+            await bot.send_message(user_id, text, reply_markup=ReplyKeyboardRemove())
+            await bot.send_message(other_id, text, reply_markup=ReplyKeyboardRemove())
             return
+
+    await message.answer("😔 Пока никого подходящего не найдено. Попробуй позже.")
+
 
 @dp.message(Command("stopsearch"))
 async def stop_search(message: Message):
