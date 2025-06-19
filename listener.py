@@ -4,13 +4,12 @@
 user_profiles ──(TRIGGER→ NOTIFY)──▶ listener ──▶ user_embeddings
 """
 
-import asyncio, asyncpg, json, traceback
+import asyncio, asyncpg, json, traceback, re
 from datetime import datetime, timezone
 from functools import partial
-from DAI_L1 import build_user_traits          # ваша heavy-функция
+from DAI_L1 import build_user_traits      # heavy-функция с OpenAI/Apify
 
-# ---------- моментально выводим все print ----------
-print = partial(print, flush=True)
+print = partial(print, flush=True)        # мгновенный вывод в Render-лог
 
 # ────────── конфиг ──────────
 DB_DSN       = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
@@ -46,6 +45,7 @@ BEGIN
 END$$;
 """
 
+# ---------- helpers ----------
 def build_upsert_sql() -> str:
     cols = ["user_id"] + NUM_COLS + ["languages","timezone","preferred_format"]
     col_list = ", ".join(cols) + ", updated_at"
@@ -56,6 +56,20 @@ def build_upsert_sql() -> str:
 
 UPSERT_SQL = build_upsert_sql()
 
+def parse_social_string(raw: str) -> dict:
+    """'tiktok: @nick, instagram: foo' → {'tiktok':'nick', 'instagram':'foo'}"""
+    pairs = re.split(r"[;,]", raw)
+    result = {}
+    for p in pairs:
+        if ":" not in p:
+            continue
+        k, v = p.split(":", 1)
+        k = k.strip().lower()
+        v = v.strip().lstrip("@")
+        if k in ("tiktok", "instagram") and v:
+            result[k] = v
+    return result
+
 # ---------- bootstrap ----------
 async def bootstrap_schema():
     print("↪ connecting DB")
@@ -65,7 +79,7 @@ async def bootstrap_schema():
     await conn.close()
     print("✅ trigger ready")
 
-# ---------- обработчик NOTIFY ----------
+# ---------- NOTIFY handler ----------
 async def on_notify(_, __, ___, payload: str):
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     print(f"\n[{ts}] 🔔 NOTIFY payload={payload}")
@@ -78,24 +92,21 @@ async def on_notify(_, __, ___, payload: str):
                 print("  ⤬ row not found")
                 return
 
-            # --- social JSON (JSONB / TEXT / NULL) -------------
-            raw_social = src.get("social")
-            if raw_social is None:
-                social = {}
-            elif isinstance(raw_social, dict):
+            # --------- разбираем social ---------
+            raw_social = src.get("social") or ""
+            social = {}
+
+            if isinstance(raw_social, dict):
                 social = raw_social
-            else:
+            elif isinstance(raw_social, str):
                 raw_social = raw_social.strip()
-                if not raw_social:
-                    social = {}
-                else:
+                if raw_social.startswith("{"):
                     try:
                         social = json.loads(raw_social)
-                        if not isinstance(social, dict):
-                            social = {}
-                    except Exception as e:
-                        print("  ⚠️ bad JSON in social:", e)
-                        social = {}
+                    except json.JSONDecodeError:
+                        social = parse_social_string(raw_social)
+                else:
+                    social = parse_social_string(raw_social)
 
             tiktok    = (social.get("tiktok")    or "").strip()
             instagram = (social.get("instagram") or "").strip()
@@ -105,7 +116,7 @@ async def on_notify(_, __, ___, payload: str):
                 print("  ⤬ both socials empty — skip")
                 return
 
-            # --- строим traits ---------------------------------
+            # --------- строим traits ---------
             traits = build_user_traits(
                 tiktok_username    = tiktok,
                 instagram_username = instagram,
@@ -126,7 +137,7 @@ async def on_notify(_, __, ___, payload: str):
         print("‼️ exception:", e)
         traceback.print_exc()
 
-# ---------- main loop ----------
+# ---------- main ----------
 async def main():
     await bootstrap_schema()
     global pool
