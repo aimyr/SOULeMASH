@@ -50,12 +50,26 @@ def build_upsert_sql() -> str:
 
 UPSERT_SQL = build_upsert_sql()
 
+
 async def bootstrap_schema():
-    print("↪ bootstrap_schema() — applying DDL")
-    conn = await asyncpg.connect(DB_DSN)
-    await conn.execute(DDL)
-    await conn.close()
-    print("✅ trigger ready")
+    try:
+        print("↪ connecting...", flush=True)
+        conn = await asyncpg.connect(DB_DSN)
+        print("✅ connected", flush=True)
+
+        print("↪ executing DDL…", flush=True)
+        await conn.execute(DDL)
+        print("✅ DDL done — trigger ready", flush=True)
+
+    except Exception as e:
+        print("‼️ DDL failed:", e, flush=True)
+        import traceback; traceback.print_exc()
+        raise            # чтобы Render пометил деплой «failed»
+
+    finally:
+        if 'conn' in locals():
+            await conn.close()
+
 
 # -------------------- DEBUG LISTENER --------------------
 async def on_notify(_, __, ___, payload: str):
