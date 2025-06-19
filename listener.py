@@ -74,9 +74,16 @@ async def on_notify(_, __, ___, payload: str):
         if not src:
             return
 
+        # ─── фильтр: нужно хотя бы одно непустое имя ───
+        tiktok    = src.get("tiktok")
+        instagram = src.get("instagram")
+        if not (tiktok and tiktok.strip()) and not (instagram and instagram.strip()):
+            # оба пустые → ничего не делаем
+            return
+
         traits = build_user_traits(
-            tiktok_username    = src.get("tiktok"),
-            instagram_username = src.get("instagram"),
+            tiktok_username    = tiktok,
+            instagram_username = instagram,
             survey_answers     = src.get("survey"),
             n_items            = 3,
         )
