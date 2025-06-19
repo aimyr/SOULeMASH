@@ -54,7 +54,11 @@ async def on_notify(conn, pid, channel, payload: str):
         row = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
         if not row:
             return
-        traits = build_user_traits(dict(row))        # → python-dict
+        traits = build_user_traits(
+        tiktok_username    = row.get("tiktok"),          # ← колонку назовите, как в БД
+        instagram_username = row.get("instagram"),
+        survey_answers     = row.get("survey"),          # если есть JSON-ответы
+        n_items            = 3)        # → python-dict
         await c.execute(_upsert_sql(), user_id, json.dumps(traits))
         print(f"🔄 user_traits updated for {user_id}")
 
