@@ -44,10 +44,16 @@ async def calculate_similarity(pool: Pool, user_id: int) -> tuple[int, float] | 
         if not my_row:
             return None
 
-        my_vector = np.array([
-    float(v) for k, v in my_row.items()
-    if k not in ("user_id", "updated_at") and isinstance(v, (int, float, str))
-])
+        FIELDS = [
+    "extraversion", "agreeableness", "openness", "conscientiousness", "neuroticism",
+    "empathy", "aggression_toxicity", "dominance", "warmth_affiliation",
+    "universalism", "self_direction", "stimulation", "achievement", "power",
+    "hedonism", "benevolence", "tradition", "conformity", "security",
+    "Movies", "Music", "Books", "Travel", "Business", "Psychology",
+    "Technology", "Sports", "Fashion", "Mindfulness"
+]
+
+my_vector = np.array([float(my_row[field]) for field in FIELDS])
 
 
         # Получаем всех остальных пользователей, кто в поиске
