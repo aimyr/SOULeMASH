@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Real-time pipe:
- user_profile  ──(TRIGGER→ NOTIFY)──▶  listener.py ──▶  user_traits
+user_profiles ──(TRIGGER→ NOTIFY)──▶ listener ──▶ user_embeddings
 """
 import asyncio, asyncpg, json
-from DAI_L1 import build_user_traits          # ← ваша функция с OpenAI/Apify
-# ────────────────────────────  конфиг  ────────────────────────────
-DB_DSN          = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
-SOURCE_TABLE    = "user_profiles"
-TARGET_TABLE    = "user_embeddings"
-CHANNEL         = "profile_change"
-# ───────────────────────────────────────────────────────────────────
+from DAI_L1 import build_user_traits        # функция, которая строит dict
+
+# ────────── конфиг ──────────
+DB_DSN       = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
+SOURCE_TABLE = "user_profiles"
+TARGET_TABLE = "user_embeddings"
+CHANNEL      = "profile_change"
+# ────────────────────────────
+
+# 29 числовых колонок в нужном порядке
+NUM_COLS = [
+    # Big 5 + соц-метрики
+    "extraversion","agreeableness","openness",
+    "conscientiousness","neuroticism",
+    "empathy","aggression_toxicity",
+    "dominance","warmth_affiliation",
+    # Schwartz-values
+    "universalism","self_direction","stimulation","achievement","power",
+    "hedonism","benevolence","tradition","conformity","security",
+    # Interests
+    "movies","music","books","travel","business",
+    "psychology","technology","sports","fashion","mindfulness"
+]
 
 DDL = f"""
 CREATE EXTENSION IF NOT EXISTS vector;
-CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
-    user_id BIGINT PRIMARY KEY,
-    traits  JSONB,
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
+
+-- Таблица уже создана миграциями, поэтому только триггер
 CREATE OR REPLACE FUNCTION notify_profile_change() RETURNS trigger AS $$
 BEGIN
   PERFORM pg_notify('{CHANNEL}', NEW.user_id::text);
@@ -36,42 +48,59 @@ BEGIN
 END$$;
 """
 
+# ---------- SQL-генератор ----------
+def build_upsert_sql() -> str:
+    all_cols = ["user_id"] + NUM_COLS + ["languages","timezone","preferred_format"]
+    col_list = ", ".join(all_cols) + ", updated_at"
+    val_list = ", ".join(f"${i+1}" for i in range(len(all_cols))) + ", now()"
+    upd_list = ", ".join(f"{c}=EXCLUDED.{c}" for c in all_cols[1:]) + ", updated_at=now()"
+    return f"INSERT INTO {TARGET_TABLE} ({col_list}) VALUES ({val_list}) " \
+           f"ON CONFLICT (user_id) DO UPDATE SET {upd_list};"
+
+UPSERT_SQL = build_upsert_sql()
+
+# ---------- bootstrap ----------
 async def bootstrap_schema():
     conn = await asyncpg.connect(DB_DSN)
-    await conn.execute(DDL)      # ← заменили цикл split
+    await conn.execute(DDL)
     await conn.close()
-    print("✅ schema & trigger ok")
+    print("✅ trigger ready")
 
-def _upsert_sql() -> str:
-    return (f"INSERT INTO {TARGET_TABLE} (user_id, traits, updated_at) "
-            f"VALUES ($1,$2::jsonb, now()) "
-            f"ON CONFLICT (user_id) DO UPDATE "
-            f"SET traits=EXCLUDED.traits, updated_at=now();")
-
-async def on_notify(conn, pid, channel, payload: str):
+# ---------- обработчик NOTIFY ----------
+async def on_notify(_, __, ___, payload: str):
     user_id = int(payload)
     async with pool.acquire() as c:
-        row = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
-        if not row:
+        src = await c.fetchrow(f"SELECT * FROM {SOURCE_TABLE} WHERE user_id=$1", user_id)
+        if not src:
             return
-        traits = build_user_traits(
-        tiktok_username    = row.get("tiktok"),          # ← колонку назовите, как в БД
-        instagram_username = row.get("instagram"),
-        survey_answers     = row.get("survey"),          # если есть JSON-ответы
-        n_items            = 3)        # → python-dict
-        await c.execute(_upsert_sql(), user_id, json.dumps(traits))
-        print(f"🔄 user_traits updated for {user_id}")
 
+        traits = build_user_traits(
+            tiktok_username    = src.get("tiktok"),
+            instagram_username = src.get("instagram"),
+            survey_answers     = src.get("survey"),
+            n_items            = 3,
+        )
+
+        # формируем args в нужном порядке
+        args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
+            traits.get("languages", []),
+            traits.get("timezone"),
+            traits.get("preferred_format"),
+        ]
+        await c.execute(UPSERT_SQL, *args)
+        print(f"🔄 embeddings upserted for {user_id}")
+
+# ---------- main loop ----------
 async def main():
     await bootstrap_schema()
     global pool
     pool = await asyncpg.create_pool(DB_DSN, min_size=2, max_size=10)
 
-    listen_conn = await asyncpg.connect(DB_DSN)
-    await listen_conn.add_listener(CHANNEL, on_notify)
-    print(f"👂  LISTEN {CHANNEL}")
+    listener = await asyncpg.connect(DB_DSN)
+    await listener.add_listener(CHANNEL, on_notify)
+    print(f"👂 LISTEN {CHANNEL}")
 
-    while True:                                     # keep alive
+    while True:
         await asyncio.sleep(3600)
 
 if __name__ == "__main__":
