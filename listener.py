@@ -81,18 +81,29 @@ async def on_notify(_, __, ___, payload: str):
             return
 
         # ---- извлекаем соц-логины ----
-        social = src.get("social") or {}            # ← JSONB колонка
-        if isinstance(social, str):
-            import json as _json
-            social = _json.loads(social)            # если хранится как TEXT
+       raw_social = src.get("social")            # JSONB, TEXT или None
+
+        if raw_social is None:
+            social = {}
+        elif isinstance(raw_social, dict):
+            social = raw_social
+        else:                                     # TEXT/VARCHAR
+            raw_social = raw_social.strip()
+            if raw_social == "":                  # пустая строка
+                social = {}
+            else:
+                try:
+                    import json as _json
+                    social = _json.loads(raw_social)
+                    if not isinstance(social, dict):
+                        social = {}
+                except Exception as e:
+                    print("  ⚠️ bad JSON in social:", e)
+                    social = {}
 
         tiktok    = (social.get("tiktok")    or "").strip()
         instagram = (social.get("instagram") or "").strip()
-        print(f"    tiktok='{tiktok}'  instagram='{instagram}'")
-
-        if not tiktok and not instagram:
-            print("  ⤬ both socials empty — skip")
-            return
+        print(f"    tiktok='{tiktok}'  instagram='{instagram}'", flush=True)
 
         # ---- строим профиль ----
         traits = build_user_traits(
