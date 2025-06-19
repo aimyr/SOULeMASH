@@ -36,7 +36,11 @@ active_chats = {}
 message_counts = {}
 
 
-EXCLUDED_KEYS = {"user_id", "updated_at", "timezone", "languages", "preferred_format", "values", "interests"}
+EXCLUDED_KEYS = {
+    "user_id", "updated_at", "timezone",
+    "languages", "preferred_format", "values", "interests"
+}
+
 def is_number(s):
     try:
         float(s)
@@ -44,35 +48,34 @@ def is_number(s):
     except (ValueError, TypeError):
         return False
 
-# Расчёт косинусного сходства
+def row_to_vector(row):
+    return np.array([
+        float(v) for k, v in row.items()
+        if k not in EXCLUDED_KEYS and is_number(v)
+    ])
+
 async def calculate_similarity(pool, user_id):
     async with pool.acquire() as conn:
         my_row = await conn.fetchrow(
             "SELECT * FROM user_embeddings WHERE user_id = $1", user_id
         )
-
         if not my_row:
             return None
 
-        my_vector = np.array([
-            float(v) for k, v in my_row.items()
-            if k not in EXCLUDED_KEYS and isinstance(v, (int, float, str)) and is_number(v)
-        ])
+        my_vector = row_to_vector(my_row)
 
         other_rows = await conn.fetch(
             "SELECT * FROM user_embeddings WHERE user_id != $1", user_id
         )
 
-
         best_match_id = None
         best_score = -1
 
         for row in other_rows:
-            other_vector = np.array([float(v) for k, v in row.items() if k not in ("user_id", "updated_at")])
+            other_vector = row_to_vector(row)
             if len(my_vector) != len(other_vector):
                 continue
 
-            # Косинусное сходство
             dot = np.dot(my_vector, other_vector)
             norm = np.linalg.norm(my_vector) * np.linalg.norm(other_vector)
             similarity = dot / norm if norm != 0 else 0
@@ -81,7 +84,10 @@ async def calculate_similarity(pool, user_id):
                 best_score = similarity
                 best_match_id = row["user_id"]
 
-        return best_match_id, round(best_score * 100, 2) if best_match_id else None
+        if best_match_id is not None:
+            return best_match_id, round(best_score * 100, 2)
+        else:
+            return None
 
 
 main_menu = ReplyKeyboardMarkup(
