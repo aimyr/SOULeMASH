@@ -81,29 +81,30 @@ async def on_notify(_, __, ___, payload: str):
             return
 
         # ---- извлекаем соц-логины ----
-       raw_social = src.get("social")            # JSONB, TEXT или None
+    # --- извлекаем соц-логины ---------------------------------
+    raw_social = src.get("social")            # JSONB, TEXT или None
 
-        if raw_social is None:
+    if raw_social is None:
+        social = {}
+    elif isinstance(raw_social, dict):
+        social = raw_social
+    else:                                     # TEXT/VARCHAR
+        raw_social = raw_social.strip()
+        if raw_social == "":                  # пустая строка
             social = {}
-        elif isinstance(raw_social, dict):
-            social = raw_social
-        else:                                     # TEXT/VARCHAR
-            raw_social = raw_social.strip()
-            if raw_social == "":                  # пустая строка
-                social = {}
-            else:
-                try:
-                    import json as _json
-                    social = _json.loads(raw_social)
-                    if not isinstance(social, dict):
-                        social = {}
-                except Exception as e:
-                    print("  ⚠️ bad JSON in social:", e)
+        else:
+            try:
+                import json as _json
+                social = _json.loads(raw_social)
+                if not isinstance(social, dict):
                     social = {}
+            except Exception as e:
+                print("  ⚠️ bad JSON in social:", e)
+                social = {}
 
-        tiktok    = (social.get("tiktok")    or "").strip()
-        instagram = (social.get("instagram") or "").strip()
-        print(f"    tiktok='{tiktok}'  instagram='{instagram}'", flush=True)
+    tiktok    = (social.get("tiktok")    or "").strip()
+    instagram = (social.get("instagram") or "").strip()
+    print(f"    tiktok='{tiktok}'  instagram='{instagram}'", flush=True)
 
         # ---- строим профиль ----
         traits = build_user_traits(
