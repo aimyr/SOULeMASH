@@ -5,7 +5,7 @@ user_profiles ──(TRIGGER→ NOTIFY)──▶ listener ──▶ user_embeddi
 DEBUG-версия: много print'ов для Render-логов
 """
 import asyncio, asyncpg, json, traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from DAI_L1 import build_user_traits
 
 DB_DSN       = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
@@ -59,7 +59,7 @@ async def bootstrap_schema():
 
 # -------------------- DEBUG LISTENER --------------------
 async def on_notify(_, __, ___, payload: str):
-    ts = datetime.utcnow().isoformat(timespec="seconds")
+    + ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
     print(f"\n[{ts}] 🔔 NOTIFY payload={payload}")
     try:
         user_id = int(payload)
