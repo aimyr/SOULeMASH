@@ -35,31 +35,24 @@ searching = set()
 active_chats = {}
 message_counts = {}
 # Расчёт косинусного сходства
-async def calculate_similarity(pool: Pool, user_id: int) -> tuple[int, float] | None:
+async def calculate_similarity(pool, user_id):
     async with pool.acquire() as conn:
-        # Получаем вектор текущего пользователя
-        my_row = await conn.fetchrow("""
-            SELECT * FROM user_embeddings WHERE user_id = $1
-        """, user_id)
+        my_row = await conn.fetchrow(
+            "SELECT * FROM user_embeddings WHERE user_id = $1", user_id
+        )
+
         if not my_row:
             return None
 
-        FIELDS = [
-    "extraversion", "agreeableness", "openness", "conscientiousness", "neuroticism",
-    "empathy", "aggression_toxicity", "dominance", "warmth_affiliation",
-    "universalism", "self_direction", "stimulation", "achievement", "power",
-    "hedonism", "benevolence", "tradition", "conformity", "security",
-    "Movies", "Music", "Books", "Travel", "Business", "Psychology",
-    "Technology", "Sports", "Fashion", "Mindfulness"
-]
+        my_vector = np.array([
+            float(v) for k, v in my_row.items()
+            if k not in EXCLUDED_KEYS and isinstance(v, (int, float, str)) and is_number(v)
+        ])
 
-my_vector = np.array([float(my_row[field]) for field in FIELDS])
+        other_rows = await conn.fetch(
+            "SELECT * FROM user_embeddings WHERE user_id != $1", user_id
+        )
 
-
-        # Получаем всех остальных пользователей, кто в поиске
-        other_rows = await conn.fetch("""
-            SELECT * FROM user_embeddings WHERE user_id != $1
-        """, user_id)
 
         best_match_id = None
         best_score = -1
