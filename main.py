@@ -31,7 +31,7 @@ DATABASE_URL = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 logging.basicConfig(level=logging.WARNING)
 storage = MemoryStorage()
-dp = Dispatcher(bot, storage=storage)
+dp = Dispatcher(storage=storage)
 matchmaker = Matchmaker()
 
 
