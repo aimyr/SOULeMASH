@@ -10,6 +10,9 @@ from aiogram.fsm.context import FSMContext
 from aiogram.client.default import DefaultBotProperties
 from config import BOT_TOKEN
 from asyncpg import Pool
+from datetime import datetime
+from collections import deque
+
 from db import (
     create_pool,
     register_user,
@@ -25,70 +28,161 @@ from db import (
 DATABASE_URL = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-dp = Dispatcher()
 logging.basicConfig(level=logging.WARNING)
-pool = None
-# перед запуском бота
+storage = MemoryStorage()
+dp = Dispatcher(bot, storage=storage)
+matchmaker = Matchmaker()
 
 
-searching = set()
-active_chats = {}
-message_counts = {}
+# --- Константы и глобальные структуры ---
+SIMILARITY_THRESHOLDS = {"низкая": (0, 40), "средняя": (40, 60), "высокая": (60, 100)}
+EXCLUDED_KEYS = {"user_id", "updated_at", "timezone", "languages", "preferred_format", "values", "interests"}
+MATCHMAKING_INTERVAL = 5  # Проверка каждые 5 секунд
+MAX_WAIT_TIME = 120       # Макс. время ожидания (сек)
 
+# Глобальные состояния
+active_chats = {}        # {user_id: partner_id}
+pool = None 
 
-EXCLUDED_KEYS = {
-    "user_id", "updated_at", "timezone",
-    "languages", "preferred_format", "values", "interests"
-}
+# --- Класс для управления подбором ---
+class Matchmaker:
+    def __init__(self):
+        self.queue = deque()  # (user_id, join_time)
+        self.user_vectors = {}  # {user_id: embedding_vector}
+        self.lock = asyncio.Lock()
+        self.task = None
+    
+    async def start(self):
+        """Запуск фоновой задачи подбора"""
+        self.task = asyncio.create_task(self.matchmaking_loop())
+    
+    async def matchmaking_loop(self):
+        """Цикл периодического подбора пар"""
+        while True:
+            await self.process_queue()
+            await asyncio.sleep(MATCHMAKING_INTERVAL)
+    
+    async def add_user(self, user_id, vector):
+        """Добавление пользователя в очередь поиска"""
+        async with self.lock:
+            # Проверка дублирования
+            if any(uid == user_id for uid, _ in self.queue):
+                return
+            
+            self.queue.append((user_id, datetime.now()))
+            self.user_vectors[user_id] = vector
+    
+    async def remove_user(self, user_id):
+        """Удаление пользователя из очереди"""
+        async with self.lock:
+            self.queue = deque([(uid, t) for uid, t in self.queue if uid != user_id])
+            self.user_vectors.pop(user_id, None)
+    
+    def calculate_similarity(self, v1, v2):
+        """Расчет косинусной схожести между векторами"""
+        try:
+            dot = np.dot(v1, v2)
+            norm = np.linalg.norm(v1) * np.linalg.norm(v2)
+            return dot / norm if norm > 1e-8 else 0
+        except Exception:
+            return 0
+    
+    async def process_queue(self):
+        """Обработка очереди и формирование пар"""
+        async with self.lock:
+            # 1. Очистка устаревших пользователей (>10 мин)
+            now = datetime.now()
+            self.queue = deque([
+                (uid, t) for uid, t in self.queue 
+                if (now - t).total_seconds() < 600
+            ])
+            
+            # 2. Проверка минимального количества
+            if len(self.queue) < 2:
+                return []
+            
+            # 3. Сортировка по времени ожидания (дольше ждущие - первые)
+            sorted_queue = sorted(self.queue, key=lambda x: x[1])
+            processed = set()
+            matches = []
+            
+            # 4. Подбор пар
+            for user_id, join_time in sorted_queue:
+                if user_id in processed:
+                    continue
+                
+                # Динамический порог схожести на основе времени ожидания
+                wait_time = (now - join_time).total_seconds()
+                threshold = 0.6 if wait_time < 30 else 0.4 if wait_time < 60 else 0.0
+                
+                # Поиск лучшего совпадения
+                best_match_id = None
+                best_score = -1
+                user_vector = self.user_vectors[user_id]
+                
+                for candidate_id, _ in self.queue:
+                    if candidate_id == user_id or candidate_id in processed:
+                        continue
+                    
+                    # Расчет схожести с кандидатом
+                    candidate_vector = self.user_vectors[candidate_id]
+                    score = self.calculate_similarity(user_vector, candidate_vector)
+                    
+                    # Проверка порога и обновление лучшего
+                    if score > best_score and score >= threshold:
+                        best_score = score
+                        best_match_id = candidate_id
+                
+                # Формирование пары
+                if best_match_id:
+                    matches.append((user_id, best_match_id, best_score * 100))
+                    processed.update([user_id, best_match_id])
+            
+            # 5. Обновление очереди
+            self.queue = deque([(uid, t) for uid, t in self.queue if uid not in processed])
+            
+            # 6. Обработка найденных пар
+            for user_id1, user_id2, score in matches:
+                # Обновление активных чатов
+                active_chats[user_id1] = user_id2
+                active_chats[user_id2] = user_id1
+                
+                # Определение уровня схожести
+                label = "низкая"
+                for cat, (low, high) in SIMILARITY_THRESHOLDS.items():
+                    if low <= score < high or (cat == "высокая" and score == 100):
+                        label = cat
+                        break
+                
+                # Уведомление пользователей
+                await bot.send_message(
+                    user_id1,
+                    f"👥 Собеседник найден! (схожесть: {label})\n\n/next — новый поиск\n/stop — закончить",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                await bot.send_message(
+                    user_id2,
+                    f"👥 Собеседник найден! (схожесть: {label})\n\n/next — новый поиск\n/stop — закончить",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+            
+            return matches
 
-def is_number(s):
+# --- Вспомогательные функции ---
+def is_number(value):
+    """Проверка, можно ли преобразовать значение в число"""
     try:
-        float(s)
+        float(value)
         return True
-    except (ValueError, TypeError):
+    except (TypeError, ValueError):
         return False
 
 def row_to_vector(row):
+    """Преобразование строки БД в вектор эмбеддингов"""
     return np.array([
-        float(v) for k, v in row.items()
-        if k not in EXCLUDED_KEYS and is_number(v)
+        float(value) for key, value in row.items()
+        if key not in EXCLUDED_KEYS and is_number(value)
     ])
-
-async def calculate_similarity(pool, user_id):
-    async with pool.acquire() as conn:
-        my_row = await conn.fetchrow(
-            "SELECT * FROM user_embeddings WHERE user_id = $1", user_id
-        )
-        if not my_row:
-            return None
-
-        my_vector = row_to_vector(my_row)
-
-        other_rows = await conn.fetch(
-            "SELECT * FROM user_embeddings WHERE user_id != $1", user_id
-        )
-
-        best_match_id = None
-        best_score = -1
-
-        for row in other_rows:
-            other_vector = row_to_vector(row)
-            if len(my_vector) != len(other_vector):
-                continue
-
-            dot = np.dot(my_vector, other_vector)
-            norm = np.linalg.norm(my_vector) * np.linalg.norm(other_vector)
-            similarity = dot / norm if norm != 0 else 0
-
-            if similarity > best_score:
-                best_score = similarity
-                best_match_id = row["user_id"]
-
-        if best_match_id is not None:
-            return best_match_id, round(best_score * 100, 2)
-        else:
-            return None
-
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
@@ -120,11 +214,6 @@ class Questionnaire(StatesGroup):
     social_input = State()  # ввод ника
 
 
-
-
-
-
-router = Router()
 
 
 def inline_yes_no():
@@ -418,30 +507,26 @@ async def start_search(message: Message, state: FSMContext):  # ✅ добави
     if not has_profile:
         await message.answer("❗️Ты не прошёл анкету. Напиши /start, чтобы пройти её.")
         return
-    searching.add(user_id)
+    
+       # Загрузка эмбеддингов пользователя из БД
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM user_embeddings WHERE user_id = $1", 
+            user_id
+        )
+        
+        if not row:
+            await message.answer("❌ Ошибка: ваши данные для поиска не найдены.")
+            return
+        
+        # Преобразование в вектор
+        vector = row_to_vector(row)
+    
+    # Добавление в систему поиска
+    await matchmaker.add_user(user_id, vector)
     await message.answer("🔍 Ищем собеседника...", reply_markup=search_menu)
 
-     # Найти наиболее похожего собеседника
-    match = await calculate_similarity(pool, user_id)
-    if match:
-        other_id, score = match
-        if other_id in searching:
-            searching.remove(user_id)
-            searching.remove(other_id)
 
-            active_chats[user_id] = other_id
-            active_chats[other_id] = user_id
-            message_counts[user_id] = 0
-            message_counts[other_id] = 0
-
-            if score < 40:
-                level = "низкая"
-            elif score < 60:
-                level = "средняя"
-            else:
-                level = "высокая"
-
-            text = f"Собеседник найден ✨ (ваша степень схожести: {level}, {score}%)\n\n/next — следующий\n/stop — закончить"
 
             await bot.send_message(user_id, text, reply_markup=ReplyKeyboardRemove())
             await bot.send_message(other_id, text, reply_markup=ReplyKeyboardRemove())
@@ -454,7 +539,7 @@ async def start_search(message: Message, state: FSMContext):  # ✅ добави
 async def stop_search(message: Message):
     user_id = message.from_user.id
     if user_id in searching:
-        searching.remove(user_id)
+        await matchmaker.remove_user(user_id)
         await message.answer("🔕 Поиск остановлен.", reply_markup=main_menu)
     else:
         await message.answer("Вы сейчас не ищете собеседника.")
