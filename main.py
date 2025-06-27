@@ -8,6 +8,7 @@ from aiogram.filters import Command, StateFilter
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.storage.memory import MemoryStorage
 from config import BOT_TOKEN
 from asyncpg import Pool
 from datetime import datetime
