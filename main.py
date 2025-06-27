@@ -28,25 +28,7 @@ from db import (
 
 DATABASE_URL = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
 
-bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-logging.basicConfig(level=logging.WARNING)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-matchmaker = Matchmaker()
 
-
-# --- Константы и глобальные структуры ---
-SIMILARITY_THRESHOLDS = {"низкая": (0, 40), "средняя": (40, 60), "высокая": (60, 100)}
-EXCLUDED_KEYS = {"user_id", "updated_at", "timezone", "languages", "preferred_format", "values", "interests"}
-MATCHMAKING_INTERVAL = 5  # Проверка каждые 5 секунд
-MAX_WAIT_TIME = 120       # Макс. время ожидания (сек)
-
-# Глобальные состояния
-active_chats = {}    
-searching = set()    # {user_id: partner_id}
-pool = None 
-
-# --- Класс для управления подбором ---
 class Matchmaker:
     def __init__(self):
         self.queue = deque()  # (user_id, join_time)
@@ -174,6 +156,26 @@ class Matchmaker:
                 )
             
             return matches
+
+
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+logging.basicConfig(level=logging.WARNING)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+matchmaker = Matchmaker()
+
+
+# --- Константы и глобальные структуры ---
+SIMILARITY_THRESHOLDS = {"низкая": (0, 40), "средняя": (40, 60), "высокая": (60, 100)}
+EXCLUDED_KEYS = {"user_id", "updated_at", "timezone", "languages", "preferred_format", "values", "interests"}
+MATCHMAKING_INTERVAL = 5  # Проверка каждые 5 секунд
+MAX_WAIT_TIME = 120       # Макс. время ожидания (сек)
+
+# Глобальные состояния
+active_chats = {}    
+searching = set()    # {user_id: partner_id}
+pool = None 
+
 
 # --- Вспомогательные функции ---
 def is_number(value):
