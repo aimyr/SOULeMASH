@@ -41,7 +41,8 @@ MATCHMAKING_INTERVAL = 5  # Проверка каждые 5 секунд
 MAX_WAIT_TIME = 120       # Макс. время ожидания (сек)
 
 # Глобальные состояния
-active_chats = {}        # {user_id: partner_id}
+active_chats = {}    
+searching = set()    # {user_id: partner_id}
 pool = None 
 
 # --- Класс для управления подбором ---
@@ -51,6 +52,11 @@ class Matchmaker:
         self.user_vectors = {}  # {user_id: embedding_vector}
         self.lock = asyncio.Lock()
         self.task = None
+
+    async def is_in_queue(self, user_id):
+        """Проверка наличия пользователя в очереди"""
+        async with self.lock:
+            return any(uid == user_id for uid, _ in self.queue)
     
     async def start(self):
         """Запуск фоновой задачи подбора"""
@@ -485,52 +491,43 @@ async def info(message: Message):
     )
 
 @dp.message(Command("search"))
-async def start_search(message: Message, state: FSMContext):  # ✅ добавили state
-    user_id = message.from_user.id  # ✅ обязательно
-    user_data = await state.get_data()  # теперь работает
+async def start_search(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    user_data = await state.get_data()
 
     if user_data.get("denied"):
-        await message.answer(
-            "❌ Ты отказался от анкеты и не можешь пользоваться этой командой. Напиши /start, чтобы вернуться.")
+        await message.answer("❌ Ты отказался от анкеты. Напиши /start")
         return
+        
     if user_id in active_chats:
         await message.answer("❗ Вы уже в чате. Используйте /next или /stop.")
         return
 
-    if user_id in searching:
+    # Проверка через matchmaker
+    if await matchmaker.is_in_queue(user_id):
         await message.answer("⏳ Вы уже ищете собеседника.")
         return
 
-
-        # здесь может быть проверка профиля из БД, если хочешь:
     has_profile = await user_has_profile(pool, message.from_user.id)
     if not has_profile:
-        await message.answer("❗️Ты не прошёл анкету. Напиши /start, чтобы пройти её.")
+        await message.answer("❗️Ты не прошёл анкету. Напиши /start")
         return
-    
-       # Загрузка эмбеддингов пользователя из БД
+
+    # Загрузка эмбеддингов
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM user_embeddings WHERE user_id = $1", 
             user_id
         )
         
-        if not row:
-            await message.answer("❌ Ошибка: ваши данные для поиска не найдены.")
-            return
-        
-        # Преобразование в вектор
-        vector = row_to_vector(row)
+    if not row:
+        await message.answer("❌ Ошибка: данные для поиска не найдены")
+        return
     
-    # Добавление в систему поиска
+    vector = row_to_vector(row)
     await matchmaker.add_user(user_id, vector)
+    searching.add(user_id)  # Добавляем в множество ищущих
     await message.answer("🔍 Ищем собеседника...", reply_markup=search_menu)
-
-
-
-            await bot.send_message(user_id, text, reply_markup=ReplyKeyboardRemove())
-            await bot.send_message(other_id, text, reply_markup=ReplyKeyboardRemove())
-            return
 
     
 
@@ -540,6 +537,7 @@ async def stop_search(message: Message):
     user_id = message.from_user.id
     if user_id in searching:
         await matchmaker.remove_user(user_id)
+        searching.discard(user_id)
         await message.answer("🔕 Поиск остановлен.", reply_markup=main_menu)
     else:
         await message.answer("Вы сейчас не ищете собеседника.")
@@ -641,9 +639,9 @@ async def main():
     global pool
     pool = await create_pool()
     await setup_bot_commands()
+    await matchmaker.start()  # Запускаем matchmaker
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    import asyncio
     asyncio.run(main())
