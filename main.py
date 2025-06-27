@@ -1,3 +1,4 @@
+import asyncio  # Добавлен импорт asyncio
 import numpy as np
 import logging
 from aiogram import Bot, Dispatcher, F, types, Router
@@ -13,6 +14,8 @@ from config import BOT_TOKEN
 from asyncpg import Pool
 from datetime import datetime
 from collections import deque
+
+# ... остальной код ...
 
 from db import (
     create_pool,
