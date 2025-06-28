@@ -610,7 +610,7 @@ async def next_chat(message: Message, state: FSMContext):
         await message.answer("❗️Ты не прошёл анкету. Напиши /start, чтобы пройти её.")
         return
 
-      if user_id in active_chats:
+    if user_id in active_chats:
         # При завершении предыдущего диалога также покажем цитату
         partner_id = active_chats[user_id]
         await increment_full_chats(pool, user_id)
