@@ -225,6 +225,19 @@ class Questionnaire(StatesGroup):
     social_select = State()  # выбор соцсети
     social_input = State()  # ввод ника
 
+QUOTES = [
+    "Не повезло здесь — повезёт в любви! ❤️",
+    "Каждая закрытая дверь ведёт к новым возможностям. 🚪✨",
+    "Не расстраивайся! Новые знакомства уже ждут тебя за углом. 🔜",
+    "Иногда нужно отпустить, чтобы встретить что-то лучшее. 🌈",
+    "Помни: за тучей солнце всегда светит. ☁️➡️☀️",
+    "Неудача — это просто повод попробовать снова! 🔁",
+    "Твой следующий собеседник может стать твоим лучшим другом. 👫",
+    "Жизнь — это череда встреч и расставаний. Цени каждую встречу! 🌍",
+    "Новые знакомства уже на подходе — приготовься! 🚀",
+    "Вселенная слышит тебя. Скоро тебе повезёт! 🌌🍀"
+]
+
 
 
 
@@ -527,7 +540,7 @@ async def start_search(message: Message, state: FSMContext):
         )
         
     if not row:
-        await message.answer("❌ Ошибка: данные для поиска не найдены")
+        await message.answer("❌ Ошибка: данные для поиска не найдены(скорее всего ваша анкета уже анализируется и вам стоит подождать, пока ИИ составит вам психопаспорт...)")
         return
     
     vector = row_to_vector(row)
@@ -560,10 +573,27 @@ async def stop(message: Message):
         await increment_full_chats(pool, user_id)
         await increment_full_chats(pool, partner_id)
 
-        await bot.send_message(partner_id, "Собеседник завершил с вами диалог 😞\nНапишите /search чтобы найти следующего.", reply_markup=main_menu)
-        await message.answer("Вы завершили диалог.", reply_markup=main_menu)
+           # Выбираем случайную цитату
+        import random
+        quote = random.choice(QUOTES)
+
+         # Формируем сообщение с цитатой
+        text_to_partner = f"👋 Собеседник завершил диалог\n\n{quote}\n\n/search — найти нового собеседника"
+
+        await bot.send_message(
+            partner_id, 
+            text_to_partner, 
+            reply_markup=main_menu
+        )
+        await message.answer(
+            "Вы завершили диалог.", 
+            reply_markup=main_menu
+        )
     else:
-        await message.answer("❗ У вас нет активного диалога.", reply_markup=main_menu)
+        await message.answer(
+            "❗ У вас нет активного диалога.", 
+            reply_markup=main_menu
+        )
 
 @dp.message(Command("next"))
 async def next_chat(message: Message, state: FSMContext):
@@ -580,10 +610,27 @@ async def next_chat(message: Message, state: FSMContext):
         await message.answer("❗️Ты не прошёл анкету. Напиши /start, чтобы пройти её.")
         return
 
-    if user_id in active_chats:
-        await stop(message)
+      if user_id in active_chats:
+        # При завершении предыдущего диалога также покажем цитату
+        partner_id = active_chats[user_id]
+        await increment_full_chats(pool, user_id)
+        await increment_full_chats(pool, partner_id)
+        
+        import random
+        quote = random.choice(QUOTES)
+        
+        await bot.send_message(
+            partner_id, 
+            f"👋 Собеседник перешёл к следующему\n\n{quote}\n\n/search — найти нового собеседника",
+            reply_markup=main_menu
+        )
+        active_chats.pop(user_id)
+        active_chats.pop(partner_id)
+    
+    # Начинаем новый поиск
+    await start_search(message, state)
 
-    await start_search(message)
+
 @dp.message(Command("me"))
 async def me(message: Message):
     user_id = message.from_user.id
