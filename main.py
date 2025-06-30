@@ -39,6 +39,49 @@ class Matchmaker:
         self.lock = asyncio.Lock()
         self.task = None
 
+    # Добавляем функцию расчета совместимости как статический метод класса
+    @staticmethod
+    def calculate_compatibility(user1, user2):
+        """Расширенный расчет совместимости с учетом психологии"""
+        total_score = 0
+        max_possible = 0
+        
+        # 1. Сравниваем основные черты
+        for trait, config in PSYCHO_TRAITS.items():
+            val1 = user1.get(trait, 0.5)
+            val2 = user2.get(trait, 0.5)
+            weight = config["weight"]
+            
+            # Для противоположных черт считаем иначе
+            if "opposite" in config:
+                opp_val1 = 1 - val1
+                similarity = 1 - abs(opp_val1 - val2)
+            else:
+                similarity = 1 - abs(val1 - val2)
+                
+            total_score += similarity * weight
+            max_possible += weight
+        
+        # 2. Учитываем предпочтения пользователей
+        pref_weight = 2.0  # Больший вес предпочтениям
+        user1_pref = user1.get("preferred_match", "similar")
+        user2_pref = user2.get("preferred_match", "similar")
+        
+        # Считаем совпадение предпочтений
+        if user1_pref == user2_pref:
+            pref_match = 1.0
+        else:
+            pref_match = 0.3
+            
+        total_score += pref_match * pref_weight
+        max_possible += pref_weight
+        
+        # 3. Нормализуем результат
+        if max_possible == 0:
+            return 0
+        final_score = (total_score / max_possible) * 100
+        return round(final_score, 1)
+
     async def is_in_queue(self, user_id):
         """Проверка наличия пользователя в очереди"""
         async with self.lock:
@@ -104,7 +147,8 @@ class Matchmaker:
                         continue
                     
                     candidate_profile = self.user_profiles[candidate_id]
-                    score = calculate_compatibility(user_profile, candidate_profile)
+                    # Используем статический метод класса для расчета
+                    score = self.calculate_compatibility(user_profile, candidate_profile)
                     
                     if score > best_score:
                         best_score = score
@@ -184,19 +228,19 @@ def row_to_vector(row):
         if key not in EXCLUDED_KEYS and is_number(value)
     ])
 
+# В функции row_to_profile добавьте проверки
 def row_to_profile(row):
     """Преобразование строки БД в психологический профиль"""
-    return {
-        "extraversion": float(row.get("q1", 0.5)),
-        "neuroticism": float(row.get("q2", 0.5)),
-        "openness": float(row.get("q3", 0.5)),
-        "agreeableness": float(row.get("q4", 0.5)),
-        "conscientiousness": float(row.get("q5", 0.5)),
-        "romantic": float(row.get("q6", 0.5)),
-        "analytic": float(row.get("q7", 0.5)),
-        "emotional": float(row.get("q8", 0.5)),
-        "preferred_match": row.get("preferred_match", "similar")
-    }
+    profile = {}
+    for trait in PSYCHO_TRAITS:
+        value = row.get(trait)
+        try:
+            profile[trait] = float(value) if value is not None else 0.5
+        except (TypeError, ValueError):
+            profile[trait] = 0.5
+    
+    profile["preferred_match"] = row.get("preferred_match", "similar")
+    return profile
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
