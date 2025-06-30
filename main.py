@@ -652,20 +652,19 @@ async def handle_social_input(message: Message, state: FSMContext):
     )
 
 
-# 1. Обновляем require_registration - добавляем state
+# 1. Обновляем обработчик команд - убираем зависимость от profile_filled
 @dp.message(Command("search", "info", "me", "next", "stop"))
-async def require_registration(message: Message, state: FSMContext):  # Добавляем state здесь
+async def require_registration(message: Message, state: FSMContext):
     user_id = message.from_user.id
     
-    # Проверяем наличие соцсети и профиля одним запросом
+    # Проверяем только наличие соцсети
     async with pool.acquire() as conn:
-        profile_data = await conn.fetchrow(
-            "SELECT social, profile_filled FROM user_profiles WHERE user_id = $1", 
+        has_social = await conn.fetchval(
+            "SELECT social IS NOT NULL FROM user_profiles WHERE user_id = $1", 
             user_id
         )
     
-    # Если нет записи или нет соцсети
-    if not profile_data or not profile_data["social"]:
+    if not has_social:
         await message.answer(
             "❗️ Ты не завершил регистрацию!\n\n"
             "Чтобы использовать бот, нужно указать соцсеть для связи. "
@@ -675,12 +674,7 @@ async def require_registration(message: Message, state: FSMContext):  # Доба
         )
         return
     
-    # Если анкета не заполнена
-    if not profile_data["profile_filled"]:
-        await message.answer("❗️Ты не прошёл анкету. Напиши /start")
-        return
-    
-    # Перенаправляем на команды с передачей state
+    # Перенаправляем на команды
     if message.text == "/search":
         await start_search(message, state)
     elif message.text == "/info":
@@ -688,9 +682,9 @@ async def require_registration(message: Message, state: FSMContext):  # Доба
     elif message.text == "/me":
         await me(message)
     elif message.text == "/next":
-        await next_chat(message, state)  # Возможно тоже нужен state
+        await next_chat(message)
     elif message.text == "/stop":
-        await stop(message, state)  # Возможно тоже нужен state
+        await stop(message)
 
 
 
@@ -720,7 +714,7 @@ async def info(message: Message):
         f"ИИ в будущем будет подбирать собеседников по интересам и психотипу."
     )
 
-# 2. Упрощаем start_search
+# 2. Упрощаем и оптимизируем start_search
 @dp.message(Command("search"))
 async def start_search(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -749,11 +743,12 @@ async def start_search(message: Message, state: FSMContext):
         )
         return
     
-    # Добавление в систему поиска (один раз!)
+    # Обработка данных профиля
     profile = row_to_profile(row)
     vector = row_to_vector(row)
     
-    await matchmaker.add_user(user_id, vector, profile)
+    # Добавление в систему поиска (один раз!)
+    await matchmaker.add_user(user_id, profile, vector)  # Обновите функцию add_user
     searching.add(user_id)
     
     await message.answer(
