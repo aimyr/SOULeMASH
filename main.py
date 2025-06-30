@@ -616,6 +616,19 @@ async def handle_social_input(message: Message, state: FSMContext):
         reply_markup=main_menu
     )
 
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_registration")
+def cancel_registration(call):
+    user_id = call.from_user.id
+    
+    # Жёсткое удаление из БД
+    db.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+    db.commit()  # Если autocommit=False
+    
+    bot.send_message(
+        user_id, 
+        "Регистрация отменена. Твои данные удалены. Используй /start для новой регистрации"
+    )
+
 @dp.message(Command("search", "info", "me", "next", "stop"))
 async def require_registration(message: Message):
     # Проверяем, заполнена ли соцсеть
