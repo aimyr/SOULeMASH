@@ -552,6 +552,8 @@ async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(StateFilter(Questionnaire.social_input))
 async def handle_social_input(message: Message, state: FSMContext):
+    user_id = message.from_user.id  # Выносим получение user_id в начало
+    
     # Если пользователь отправил команду вместо ника
     if message.text.startswith('/'):
         await message.answer(
@@ -567,13 +569,13 @@ async def handle_social_input(message: Message, state: FSMContext):
                 # УДАЛЯЕМ ПОЛЬЗОВАТЕЛЯ ИЗ БАЗЫ
                 await conn.execute(
                     "DELETE FROM user_profiles WHERE user_id = $1",
-                    user_id
+                    user_id  # Используем переменную user_id
                 )
                 # Если есть другие связанные таблицы - удаляем и там
                 # await conn.execute("DELETE FROM another_table WHERE user_id = $1", user_id)
                 
         except Exception as e:
-            logging.error(f"Error deleting user: {e}")
+            logging.error(f"Error deleting user {user_id}: {e}")  # Добавляем user_id в лог
             # В случае ошибки всё равно продолжаем
         
         # Всегда очищаем состояние
@@ -583,7 +585,7 @@ async def handle_social_input(message: Message, state: FSMContext):
             "Для новой регистрации используй /start",
             reply_markup=ReplyKeyboardRemove()
         )
-        return  # Важно не забыть return!
+        return
     
     data = await state.get_data()
     social_type = data.get("social_type")
