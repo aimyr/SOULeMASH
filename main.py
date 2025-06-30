@@ -35,7 +35,7 @@ DATABASE_URL = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg
 class Matchmaker:
     def __init__(self):
         self.queue = deque()  # (user_id, join_time)
-        self.user_vectors = {}  # {user_id: embedding_vector}
+        self.user_profiles = {}  # {user_id: психологический профиль}
         self.lock = asyncio.Lock()
         self.task = None
 
@@ -51,91 +51,73 @@ class Matchmaker:
     async def matchmaking_loop(self):
         """Цикл периодического подбора пар"""
         while True:
-            await self.process_queue()
-            await asyncio.sleep(MATCHMAKING_INTERVAL)
+            try:
+                await self.process_queue()
+                await asyncio.sleep(MATCHMAKING_INTERVAL)
+            except Exception as e:
+                logging.error(f"Ошибка в matchmaking_loop: {e}")
     
-    async def add_user(self, user_id, vector):
+    async def add_user(self, user_id, profile):
         """Добавление пользователя в очередь поиска"""
         async with self.lock:
-            # Проверка дублирования
             if any(uid == user_id for uid, _ in self.queue):
                 return
             
             self.queue.append((user_id, datetime.now()))
-            self.user_vectors[user_id] = vector
+            self.user_profiles[user_id] = profile
     
     async def remove_user(self, user_id):
         """Удаление пользователя из очереди"""
         async with self.lock:
             self.queue = deque([(uid, t) for uid, t in self.queue if uid != user_id])
-            self.user_vectors.pop(user_id, None)
-    
-    def calculate_similarity(self, v1, v2):
-        """Расчет косинусной схожести между векторами"""
-        try:
-            dot = np.dot(v1, v2)
-            norm = np.linalg.norm(v1) * np.linalg.norm(v2)
-            return dot / norm if norm > 1e-8 else 0
-        except Exception:
-            return 0
+            self.user_profiles.pop(user_id, None)
     
     async def process_queue(self):
         """Обработка очереди и формирование пар"""
         async with self.lock:
-            # 1. Очистка устаревших пользователей (>10 мин)
+            # Очистка устаревших пользователей (>10 мин)
             now = datetime.now()
             self.queue = deque([
                 (uid, t) for uid, t in self.queue 
                 if (now - t).total_seconds() < 600
             ])
             
-            # 2. Проверка минимального количества
             if len(self.queue) < 2:
                 return []
             
-            # 3. Сортировка по времени ожидания (дольше ждущие - первые)
+            # Сортировка по времени ожидания
             sorted_queue = sorted(self.queue, key=lambda x: x[1])
             processed = set()
             matches = []
             
-            # 4. Подбор пар
+            # Подбор пар
             for user_id, join_time in sorted_queue:
                 if user_id in processed:
                     continue
                 
-                # Динамический порог схожести на основе времени ожидания
-                wait_time = (now - join_time).total_seconds()
-                threshold = 0.6 if wait_time < 30 else 0.4 if wait_time < 60 else 0.0
-                
-                # Поиск лучшего совпадения
                 best_match_id = None
                 best_score = -1
-                user_vector = self.user_vectors[user_id]
+                user_profile = self.user_profiles[user_id]
                 
                 for candidate_id, _ in self.queue:
                     if candidate_id == user_id or candidate_id in processed:
                         continue
                     
-                    # Расчет схожести с кандидатом
-                    candidate_vector = self.user_vectors[candidate_id]
-                    score = self.calculate_similarity(user_vector, candidate_vector)
+                    candidate_profile = self.user_profiles[candidate_id]
+                    score = calculate_compatibility(user_profile, candidate_profile)
                     
-                    # Проверка порога и обновление лучшего
-                    if score > best_score and score >= threshold:
+                    if score > best_score:
                         best_score = score
                         best_match_id = candidate_id
                 
-                # Формирование пары
                 if best_match_id:
-                    matches.append((user_id, best_match_id, best_score * 100))
+                    matches.append((user_id, best_match_id, best_score))
                     processed.update([user_id, best_match_id])
             
-            # 5. Обновление очереди
             self.queue = deque([(uid, t) for uid, t in self.queue if uid not in processed])
             
-            # 6. Обработка найденных пар
+            # Уведомление пользователей
             for user_id1, user_id2, score in matches:
-                # Обновление активных чатов
                 active_chats[user_id1] = user_id2
                 active_chats[user_id2] = user_id1
                 
@@ -146,15 +128,21 @@ class Matchmaker:
                         label = cat
                         break
                 
-                # Уведомление пользователей
+                # Форматирование процентов
+                percent = round(score)
+                
                 await bot.send_message(
                     user_id1,
-                    f"👥 Собеседник найден! (схожесть: {label})\n\n/next — новый поиск\n/stop — закончить",
+                    f"👤 Собеседник найден! (схожесть: {label}, {percent}%)\n\n"
+                    f"/next — новый поиск\n"
+                    f"/stop — закончить диалог",
                     reply_markup=ReplyKeyboardRemove()
                 )
                 await bot.send_message(
                     user_id2,
-                    f"👥 Собеседник найден! (схожесть: {label})\n\n/next — новый поиск\n/stop — закончить",
+                    f"👤 Собеседник найден! (схожесть: {label}, {percent}%)\n\n"
+                    f"/next — новый поиск\n"
+                    f"/stop — закончить диалог",
                     reply_markup=ReplyKeyboardRemove()
                 )
             
@@ -195,6 +183,20 @@ def row_to_vector(row):
         float(value) for key, value in row.items()
         if key not in EXCLUDED_KEYS and is_number(value)
     ])
+
+def row_to_profile(row):
+    """Преобразование строки БД в психологический профиль"""
+    return {
+        "extraversion": float(row.get("q1", 0.5)),
+        "neuroticism": float(row.get("q2", 0.5)),
+        "openness": float(row.get("q3", 0.5)),
+        "agreeableness": float(row.get("q4", 0.5)),
+        "conscientiousness": float(row.get("q5", 0.5)),
+        "romantic": float(row.get("q6", 0.5)),
+        "analytic": float(row.get("q7", 0.5)),
+        "emotional": float(row.get("q8", 0.5)),
+        "preferred_match": row.get("preferred_match", "similar")
+    }
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
@@ -552,6 +554,29 @@ async def start_search(message: Message, state: FSMContext):
     if not row:
         await message.answer("❌ Ошибка: данные для поиска не найдены(скорее всего ваша анкета уже анализируется и вам стоит подождать, пока ИИ составит вам психопаспорт...)")
         return
+        
+    # Загрузка профиля из БД
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM user_embeddings WHERE user_id = $1", 
+            user_id
+        )
+        
+    if not row:
+        await message.answer("❌ Ошибка: ваш психологический профиль не найден")
+        return
+    
+    profile = row_to_profile(row)
+    
+    # Добавление в систему поиска
+    await matchmaker.add_user(user_id, profile)
+    searching.add(user_id)
+    
+    await message.answer(
+        "🔍 Ищем собеседника на основе вашего психологического профиля...\n"
+        "Это займет от нескольких секунд до пары минут",
+        reply_markup=search_menu
+    )
     
     vector = row_to_vector(row)
     await matchmaker.add_user(user_id, vector)
