@@ -531,33 +531,110 @@ async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
     social_type = callback.data.split("_")[1]  # 'instagram' или 'tiktok'
     await state.update_data(social_type=social_type)
     await state.set_state(Questionnaire.social_input)
-
+    
+    # Создаем клавиатуру для отмены
+    cancel_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Отменить регистрацию")]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    
     await callback.message.edit_reply_markup()
-    await callback.message.answer(f"🔗 Введи свой @{social_type} ник (начинай с @):")
+    await callback.message.answer(
+        f"🔗 Введи свой @{social_type} ник (начинай с @):\n\n"
+        "Пример: @твой_ник\n"
+        "Это нужно, чтобы собеседники могли с тобой связаться после диалога.",
+        reply_markup=cancel_kb
+    )
     await callback.answer()
+
 @dp.message(StateFilter(Questionnaire.social_input))
 async def handle_social_input(message: Message, state: FSMContext):
+    # Обработка отмены регистрации
+    if message.text == "❌ Отменить регистрацию":
+        await state.clear()
+        await message.answer(
+            "Регистрация отменена. Ты сможешь пройти её позже через /start",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+    
     data = await state.get_data()
     social_type = data.get("social_type")
     username = message.text.strip()
-
+    
+    # Проверка формата
     if not username.startswith("@"):
-        await message.answer("⚠️ Пожалуйста, начни ник с @")
+        await message.answer(
+            "⚠️ Неправильный формат! Ник должен начинаться с @\n\n"
+            f"Пожалуйста, введи свой @{social_type} ник правильно:"
+        )
         return
-
+        
+    # Проверка минимальной длины
+    if len(username) < 4:
+        await message.answer(
+            "⚠️ Слишком короткий ник! Должно быть не менее 4 символов\n\n"
+            f"Пожалуйста, введи правильный @{social_type} ник:"
+        )
+        return
+    
+    # Сохранение в базу
     value = f"{social_type}: {username}"
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE user_profiles SET social = $1 WHERE user_id = $2",
+                value,
+                message.from_user.id
+            )
+    except Exception as e:
+        logging.error(f"Error saving social: {e}")
+        await message.answer(
+            "❌ Ошибка при сохранении. Попробуй еще раз:",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return
+    
+    # Успешное завершение
+    await state.clear()
+    await message.answer(
+        "🎉 Регистрация завершена! Теперь ты можешь:\n\n"
+        "• Найти собеседника: /search\n"
+        "• Посмотреть свой профиль: /me\n"
+        "• Узнать о боте: /info",
+        reply_markup=main_menu
+    )
 
-    conn = await pool.acquire()
-    async with conn.transaction():
-        await conn.execute(
-            "UPDATE user_profiles SET social = $1 WHERE user_id = $2",
-            value,
+@dp.message(Command("search", "info", "me", "next", "stop"))
+async def require_registration(message: Message):
+    # Проверяем, заполнена ли соцсеть
+    async with pool.acquire() as conn:
+        has_social = await conn.fetchval(
+            "SELECT social IS NOT NULL FROM user_profiles WHERE user_id = $1", 
             message.from_user.id
         )
-    await pool.release(conn)
-
-    await state.clear()
-    await message.answer("Спасибо! 🎉 Всё сохранено.\nТеперь нажми /search, чтобы найти собеседника.", reply_markup=main_menu)
+    
+    if not has_social:
+        await message.answer(
+            "❗️ Ты не завершил регистрацию!\n\n"
+            "Чтобы использовать бот, нужно указать соцсеть для связи. "
+            "Это необходимо, чтобы собеседники могли с тобой связаться после диалога.\n\n"
+            "Закончи регистрацию через /start",
+            reply_markup=main_menu
+        )
+    else:
+        # Перенаправляем на соответствующие обработчики
+        if message.text == "/search":
+            await start_search(message)
+        elif message.text == "/info":
+            await info(message)
+        elif message.text == "/me":
+            await me(message)
+        elif message.text == "/next":
+            await next_chat(message)
+        elif message.text == "/stop":
+            await stop(message)
 
 
 # Главное меню
@@ -646,7 +723,7 @@ async def start_search(message: Message, state: FSMContext):
     vector = row_to_vector(row)
     await matchmaker.add_user(user_id, vector)
     searching.add(user_id)  # Добавляем в множество ищущих
-    await message.answer("🔍 Ищем собеседника...", reply_markup=search_menu)
+    
 
     
 
