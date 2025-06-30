@@ -528,13 +528,15 @@ async def handle_question(message: Message, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("social_"), StateFilter(Questionnaire.social_select))
 async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
-    social_type = callback.data.split("_")[1]  # 'instagram' или 'tiktok'
+    social_type = callback.data.split("_")[1]
     await state.update_data(social_type=social_type)
     await state.set_state(Questionnaire.social_input)
     
     # Создаем клавиатуру для отмены
     cancel_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Отменить регистрацию")]],
+        keyboard=[
+            [KeyboardButton(text="❌ Отменить регистрацию")]
+        ],
         resize_keyboard=True,
         one_time_keyboard=True
     )
@@ -542,14 +544,22 @@ async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_reply_markup()
     await callback.message.answer(
         f"🔗 Введи свой @{social_type} ник (начинай с @):\n\n"
-        "Пример: @твой_ник\n"
-        "Это нужно, чтобы собеседники могли с тобой связаться после диалога.",
+        "Пример: @твой_ник\n\n"
+        "Если передумал - нажми '❌ Отменить регистрацию'",
         reply_markup=cancel_kb
     )
     await callback.answer()
 
 @dp.message(StateFilter(Questionnaire.social_input))
 async def handle_social_input(message: Message, state: FSMContext):
+    # Если пользователь отправил команду вместо ника
+    if message.text.startswith('/'):
+        await message.answer(
+            "⚠️ Пожалуйста, сначала завершите ввод соцсети!\n\n"
+            "Введите ваш ник в формате @username или нажмите '❌ Отменить регистрацию'"
+        )
+        return
+    
     # Обработка отмены регистрации
     if message.text == "❌ Отменить регистрацию":
         await state.clear()
