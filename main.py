@@ -599,10 +599,27 @@ async def handle_social_input(message: Message, state: FSMContext):
         )
         return
         
-    # Проверка минимальной длины
-    if len(username) < 4:
+    # Проверка длины ника
+    username_length = len(username[1:])  # Длина без @
+    
+    if username_length < 4:
         await message.answer(
             "⚠️ Слишком короткий ник! Должно быть не менее 4 символов\n\n"
+            f"Пожалуйста, введи правильный @{social_type} ник:"
+        )
+        return
+        
+    if username_length > 50:
+        await message.answer(
+            "⚠️ Слишком длинный ник! Максимально допустимо 50 символов\n\n"
+            f"Пожалуйста, введи правильный @{social_type} ник:"
+        )
+        return
+    
+    # Проверка допустимых символов (опционально)
+    if not re.match(r"^@[a-zA-Z0-9_.]+$", username):
+        await message.answer(
+            "⚠️ Недопустимые символы! Разрешены только буквы, цифры, точки и подчёркивания\n\n"
             f"Пожалуйста, введи правильный @{social_type} ник:"
         )
         return
@@ -635,16 +652,20 @@ async def handle_social_input(message: Message, state: FSMContext):
     )
 
 
+# 1. Обновляем require_registration - добавляем state
 @dp.message(Command("search", "info", "me", "next", "stop"))
-async def require_registration(message: Message):
-    # Проверяем, заполнена ли соцсеть
+async def require_registration(message: Message, state: FSMContext):  # Добавляем state здесь
+    user_id = message.from_user.id
+    
+    # Проверяем наличие соцсети и профиля одним запросом
     async with pool.acquire() as conn:
-        has_social = await conn.fetchval(
-            "SELECT social IS NOT NULL FROM user_profiles WHERE user_id = $1", 
-            message.from_user.id
+        profile_data = await conn.fetchrow(
+            "SELECT social, profile_filled FROM user_profiles WHERE user_id = $1", 
+            user_id
         )
     
-    if not has_social:
+    # Если нет записи или нет соцсети
+    if not profile_data or not profile_data["social"]:
         await message.answer(
             "❗️ Ты не завершил регистрацию!\n\n"
             "Чтобы использовать бот, нужно указать соцсеть для связи. "
@@ -652,18 +673,25 @@ async def require_registration(message: Message):
             "Закончи регистрацию через /start",
             reply_markup=main_menu
         )
-    else:
-        # Перенаправляем на соответствующие обработчики
-        if message.text == "/search":
-            await start_search(message)
-        elif message.text == "/info":
-            await info(message)
-        elif message.text == "/me":
-            await me(message)
-        elif message.text == "/next":
-            await next_chat(message)
-        elif message.text == "/stop":
-            await stop(message)
+        return
+    
+    # Если анкета не заполнена
+    if not profile_data["profile_filled"]:
+        await message.answer("❗️Ты не прошёл анкету. Напиши /start")
+        return
+    
+    # Перенаправляем на команды с передачей state
+    if message.text == "/search":
+        await start_search(message, state)
+    elif message.text == "/info":
+        await info(message)
+    elif message.text == "/me":
+        await me(message)
+    elif message.text == "/next":
+        await next_chat(message, state)  # Возможно тоже нужен state
+    elif message.text == "/stop":
+        await stop(message, state)  # Возможно тоже нужен state
+
 
 
 # Главное меню
@@ -692,55 +720,40 @@ async def info(message: Message):
         f"ИИ в будущем будет подбирать собеседников по интересам и психотипу."
     )
 
+# 2. Упрощаем start_search
 @dp.message(Command("search"))
 async def start_search(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    user_data = await state.get_data()
-
-    if user_data.get("denied"):
-        await message.answer("❌ Ты отказался от анкеты. Напиши /start")
-        return
-        
+    
+    # Проверка, что пользователь уже в чате
     if user_id in active_chats:
         await message.answer("❗ Вы уже в чате. Используйте /next или /stop.")
         return
 
-    # Проверка через matchmaker
+    # Проверка, что уже в очереди поиска
     if await matchmaker.is_in_queue(user_id):
         await message.answer("⏳ Вы уже ищете собеседника.")
         return
 
-    has_profile = await user_has_profile(pool, message.from_user.id)
-    if not has_profile:
-        await message.answer("❗️Ты не прошёл анкету. Напиши /start")
-        return
-
-    # Загрузка эмбеддингов
+    # Загрузка эмбеддингов (один запрос вместо двух)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM user_embeddings WHERE user_id = $1", 
             user_id
         )
-        
+    
     if not row:
-        await message.answer("❌ Ошибка: данные для поиска не найдены(скорее всего ваша анкета уже анализируется и вам стоит подождать, пока ИИ составит вам психопаспорт...)")
-        return
-        
-    # Загрузка профиля из БД
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM user_embeddings WHERE user_id = $1", 
-            user_id
+        await message.answer(
+            "❌ Ваш психологический профиль не найден\n"
+            "Возможно, анкета еще обрабатывается. Попробуйте позже."
         )
-        
-    if not row:
-        await message.answer("❌ Ошибка: ваш психологический профиль не найден")
         return
     
+    # Добавление в систему поиска (один раз!)
     profile = row_to_profile(row)
+    vector = row_to_vector(row)
     
-    # Добавление в систему поиска
-    await matchmaker.add_user(user_id, profile)
+    await matchmaker.add_user(user_id, vector, profile)
     searching.add(user_id)
     
     await message.answer(
@@ -748,10 +761,6 @@ async def start_search(message: Message, state: FSMContext):
         "Это займет от нескольких секунд до пары минут",
         reply_markup=search_menu
     )
-    
-    vector = row_to_vector(row)
-    await matchmaker.add_user(user_id, vector)
-    searching.add(user_id)  # Добавляем в множество ищущих
     
 
     
