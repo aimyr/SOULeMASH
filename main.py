@@ -199,9 +199,31 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 matchmaker = Matchmaker()
 
+# --- Константы психологических черт ---
+PSYCHO_TRAITS = {
+    "extraversion": {"weight": 1.5, "opposite": "introversion"},
+    "neuroticism": {"weight": 1.3, "opposite": "stability"},
+    "openness": {"weight": 1.2},
+    "agreeableness": {"weight": 1.1},
+    "conscientiousness": {"weight": 1.4},
+    "romantic": {"weight": 0.9},
+    "analytic": {"weight": 0.8},
+    "emotional": {"weight": 1.0}
+}
+
+MATCH_TYPES = {
+    "similar": ["extraversion", "openness", "agreeableness"],
+    "complementary": ["neuroticism", "conscientiousness"],
+    "neutral": ["analytic", "emotional"]
+}
+
+SIMILARITY_THRESHOLDS = {
+    "низкая": (0, 30),
+    "средняя": (30, 70), 
+    "высокая": (70, 100)
+}
 
 # --- Константы и глобальные структуры ---
-SIMILARITY_THRESHOLDS = {"низкая": (0, 40), "средняя": (40, 60), "высокая": (60, 100)}
 EXCLUDED_KEYS = {"user_id", "updated_at", "timezone", "languages", "preferred_format", "values", "interests"}
 MATCHMAKING_INTERVAL = 5  # Проверка каждые 5 секунд
 MAX_WAIT_TIME = 120       # Макс. время ожидания (сек)
@@ -228,11 +250,10 @@ def row_to_vector(row):
         if key not in EXCLUDED_KEYS and is_number(value)
     ])
 
-# В функции row_to_profile добавьте проверки
 def row_to_profile(row):
     """Преобразование строки БД в психологический профиль"""
     profile = {}
-    for trait in PSYCHO_TRAITS:
+    for trait in PSYCHO_TRAITS:  # Теперь PSYCHO_TRAITS доступна
         value = row.get(trait)
         try:
             profile[trait] = float(value) if value is not None else 0.5
