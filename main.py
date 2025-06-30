@@ -714,7 +714,6 @@ async def info(message: Message):
         f"ИИ в будущем будет подбирать собеседников по интересам и психотипу."
     )
 
-# 2. Упрощаем и оптимизируем start_search
 @dp.message(Command("search"))
 async def start_search(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -729,7 +728,7 @@ async def start_search(message: Message, state: FSMContext):
         await message.answer("⏳ Вы уже ищете собеседника.")
         return
 
-    # Загрузка эмбеддингов (один запрос вместо двух)
+    # Загрузка эмбеддингов
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT * FROM user_embeddings WHERE user_id = $1", 
@@ -745,10 +744,9 @@ async def start_search(message: Message, state: FSMContext):
     
     # Обработка данных профиля
     profile = row_to_profile(row)
-    vector = row_to_vector(row)
     
-    # Добавление в систему поиска (один раз!)
-    await matchmaker.add_user(user_id, profile, vector)  # Обновите функцию add_user
+    # Добавление в систему поиска (ТОЛЬКО ПРОФИЛЬ!)
+    await matchmaker.add_user(user_id, profile)
     searching.add(user_id)
     
     await message.answer(
