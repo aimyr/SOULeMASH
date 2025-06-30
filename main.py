@@ -560,14 +560,30 @@ async def handle_social_input(message: Message, state: FSMContext):
         )
         return
     
-    # Обработка отмены регистрации
+    # Обработка отмены регистрации (ПОЛНОЕ УДАЛЕНИЕ)
     if message.text == "❌ Отменить регистрацию":
+        try:
+            async with pool.acquire() as conn:
+                # УДАЛЯЕМ ПОЛЬЗОВАТЕЛЯ ИЗ БАЗЫ
+                await conn.execute(
+                    "DELETE FROM user_profiles WHERE user_id = $1",
+                    user_id
+                )
+                # Если есть другие связанные таблицы - удаляем и там
+                # await conn.execute("DELETE FROM another_table WHERE user_id = $1", user_id)
+                
+        except Exception as e:
+            logging.error(f"Error deleting user: {e}")
+            # В случае ошибки всё равно продолжаем
+        
+        # Всегда очищаем состояние
         await state.clear()
         await message.answer(
-            "Регистрация отменена. Ты сможешь пройти её позже через /start",
+            "Регистрация отменена. Все твои данные удалены.\n"
+            "Для новой регистрации используй /start",
             reply_markup=ReplyKeyboardRemove()
         )
-        return
+        return  # Важно не забыть return!
     
     data = await state.get_data()
     social_type = data.get("social_type")
@@ -616,18 +632,6 @@ async def handle_social_input(message: Message, state: FSMContext):
         reply_markup=main_menu
     )
 
-@bot.callback_query_handler(func=lambda call: call.data == "cancel_registration")
-def cancel_registration(call):
-    user_id = call.from_user.id
-    
-    # Жёсткое удаление из БД
-    db.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
-    db.commit()  # Если autocommit=False
-    
-    bot.send_message(
-        user_id, 
-        "Регистрация отменена. Твои данные удалены. Используй /start для новой регистрации"
-    )
 
 @dp.message(Command("search", "info", "me", "next", "stop"))
 async def require_registration(message: Message):
