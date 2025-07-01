@@ -933,7 +933,7 @@ async def handle_admin_action(callback: CallbackQuery):
     # Удаляем клавиатуру
     await callback.message.edit_reply_markup()
 
-# --- Система наказаний ---
+# --- Исправленная система наказаний ---
 async def add_warning(user_id: int):
     async with pool.acquire() as conn:
         # Добавляем предупреждение
@@ -955,13 +955,18 @@ async def add_warning(user_id: int):
 
 async def temp_ban_user(user_id: int, days: int):
     async with pool.acquire() as conn:
-        # Используем правильный синтаксис для интервала
+        # Используем UTC время для консистентности
         await conn.execute("""
             INSERT INTO user_punishments (user_id, banned_until)
-            VALUES ($1, NOW() + INTERVAL '%s days')
+            VALUES ($1, NOW() AT TIME ZONE 'UTC' + INTERVAL '%s days')
             ON CONFLICT (user_id) DO UPDATE
-            SET banned_until = NOW() + INTERVAL '%s days'
+            SET banned_until = NOW() AT TIME ZONE 'UTC' + INTERVAL '%s days'
         """ % (days, days), user_id)
+        
+        # Добавляем флаг бана
+        await conn.execute("""
+            UPDATE users SET is_banned = TRUE WHERE user_id = $1
+        """, user_id)
 
 async def perm_ban_user(user_id: int):
     async with pool.acquire() as conn:
@@ -971,46 +976,85 @@ async def perm_ban_user(user_id: int):
             ON CONFLICT (user_id) DO UPDATE
             SET banned_until = '9999-12-31'::timestamp
         """, user_id)
-# --- Проверка бана при старте ---
+        
+        # Добавляем флаг бана
+        await conn.execute("""
+            UPDATE users SET is_banned = TRUE WHERE user_id = $1
+        """, user_id)
+
+# --- Глобальная проверка бана ---
+async def is_user_banned(user_id: int) -> bool:
+    async with pool.acquire() as conn:
+        # Проверяем по флагу и времени бана
+        return await conn.fetchval("""
+            SELECT 1 
+            FROM users u
+            JOIN user_punishments up ON u.user_id = up.user_id
+            WHERE u.user_id = $1 
+            AND (
+                u.is_banned = TRUE 
+                OR (up.banned_until IS NOT NULL AND up.banned_until > NOW() AT TIME ZONE 'UTC')
+            )
+        """, user_id)
+
+# --- Проверка бана при старте (исправленная) ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user_id = message.from_user.id
     
     # Проверка бана
-    async with pool.acquire() as conn:
-        ban_info = await conn.fetchrow(
-            "SELECT banned_until FROM user_punishments WHERE user_id = $1", 
-            user_id
-        )
-    
-    if ban_info:
-        ban_date = ban_info['banned_until']
-        if ban_date > datetime.now():
+    if await is_user_banned(user_id):
+        # Получаем информацию о бане
+        async with pool.acquire() as conn:
+            ban_info = await conn.fetchrow(
+                "SELECT banned_until FROM user_punishments WHERE user_id = $1", 
+                user_id
+            )
+        
+        if ban_info and ban_info['banned_until']:
+            ban_date = ban_info['banned_until']
             if ban_date.year == 9999:
-                text = "⛔ Ваш аккаунт заблокирован навсегда!"
+                return await message.answer("⛔ Ваш аккаунт заблокирован навсегда!")
             else:
-                text = f"⏳ Ваш аккаунт заблокирован до {ban_date.strftime('%d.%m.%Y %H:%M')}!"
-            return await message.answer(text)
+                return await message.answer(
+                    f"⏳ Ваш аккаунт заблокирован до {ban_date.strftime('%d.%m.%Y %H:%M')}!"
+                )
+        else:
+            return await message.answer("⛔ Ваш аккаунт заблокирован!")
     
     # ... остальная логика старта ...
 
-# --- Проверка бана перед поиском ---
+# --- Проверка бана перед поиском (исправленная) ---
 @dp.message(Command("search"))
-async def start_search(message: Message):
+async def start_search(message: Message, state: FSMContext):
     user_id = message.from_user.id
     
     # Проверка бана
-    async with pool.acquire() as conn:
-        is_banned = await conn.fetchval(
-            "SELECT 1 FROM user_punishments "
-            "WHERE user_id = $1 AND banned_until > NOW()",
-            user_id
-        )
-    
-    if is_banned:
+    if await is_user_banned(user_id):
         return await message.answer("⛔ Вы не можете искать собеседников: ваш аккаунт заблокирован.")
+    
+    # ... остальная логика поиска ...
 
-
+# --- Глобальный middleware для проверки бана ---
+@dp.update.outer_middleware()
+async def ban_check_middleware(handler, event, data):
+    # Проверяем только сообщения и callback-запросы
+    if not isinstance(event, (Message, CallbackQuery)):
+        return await handler(event, data)
+    
+    user_id = event.from_user.id
+    
+    # Проверяем бан
+    if await is_user_banned(user_id):
+        # Для сообщений
+        if isinstance(event, Message):
+            await event.answer("⛔ Ваш аккаунт заблокирован!")
+        # Для callback-запросов
+        elif isinstance(event, CallbackQuery):
+            await event.answer("⛔ Ваш аккаунт заблокирован!", show_alert=True)
+        return
+    
+    return await handler(event, data)
 
 
 
