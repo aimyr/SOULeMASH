@@ -199,6 +199,10 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 matchmaker = Matchmaker()
 
+ADMINS = [1129817189]  # Ваш ID
+SUPPORT_USERNAME = "@soulemesh_channel"
+
+
 # --- Константы психологических черт ---
 PSYCHO_TRAITS = {
     "extraversion": {"weight": 1.5, "opposite": "introversion"},
@@ -697,6 +701,261 @@ search_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
+
+
+# --- Команда репорта ---
+@dp.message(Command("report"))
+async def cmd_report(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверка активного чата
+    if user_id not in active_chats:
+        return await message.answer("❌ Жалобу можно отправить только во время диалога.")
+    
+    # Запрос причины
+    await message.answer(
+        "📝 Напишите причину жалобы одним сообщением:\n"
+        "Примеры:\n"
+        "- 'Отправляет спам'\n"
+        "- 'Присылает оскорбления'\n"
+        "- 'Ведет себя подозрительно'\n\n"
+        "Можно прикрепить скриншот к этому сообщению",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    
+    # Сохраняем минимальные данные
+    active_reports[user_id] = {
+        "reported_user_id": active_chats[user_id],
+        "message_id": message.message_id
+    }
+
+# --- Обработка жалобы ---
+active_reports = {}
+
+@dp.message(F.content_type.in_({"text", "photo", "document"}))
+async def handle_report_content(message: Message):
+    user_id = message.from_user.id
+    if user_id not in active_reports:
+        return
+    
+    report_data = active_reports[user_id]
+    reason = message.text or "Причина не указана"
+    screenshot = None
+    
+    # Извлекаем скриншот если есть
+    if message.photo:
+        screenshot = message.photo[-1].file_id
+    elif message.document:
+        screenshot = message.document.file_id
+    
+    # Сохраняем в базу
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO reports (reporter_id, reported_user_id, reason, screenshot_file_id) "
+            "VALUES ($1, $2, $3, $4)",
+            user_id, report_data["reported_user_id"], reason, screenshot
+        )
+    
+    # Завершаем диалог
+    partner_id = active_chats.pop(user_id)
+    active_chats.pop(partner_id, None)
+    
+    # Уведомления
+    await message.answer(
+        "✅ Жалоба отправлена! Диалог завершен.\n"
+        f"Администратор рассмотрит её в течение 24 часов.",
+        reply_markup=main_menu
+    )
+    
+    await bot.send_message(
+        partner_id,
+        "⚠️ Диалог завершен по жалобе собеседника.\n"
+        f"Если это ошибка, напишите {SUPPORT_USERNAME}",
+        reply_markup=main_menu
+    )
+    
+    # Уведомление админам
+    await notify_admins(
+        reporter_id=user_id,
+        reported_user_id=partner_id,
+        reason=reason,
+        screenshot_file_id=screenshot
+    )
+    
+    del active_reports[user_id]
+
+# --- Уведомление админов ---
+async def notify_admins(reporter_id: int, reported_user_id: int, reason: str, screenshot_file_id: str = None):
+    text = (
+        f"🚨 НОВАЯ ЖАЛОБА\n\n"
+        f"👤 От: {reporter_id}\n"
+        f"👥 На: {reported_user_id}\n"
+        f"📌 Причина: {reason}"
+    )
+    
+    # Кнопки действий
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚠️ Предупредить", callback_data=f"warn:{reported_user_id}"),
+            InlineKeyboardButton(text="⏳ Забанить на день", callback_data=f"tempban:1:{reported_user_id}")
+        ],
+        [
+            InlineKeyboardButton(text="🔞 Бан на неделю", callback_data=f"tempban:7:{reported_user_id}"),
+            InlineKeyboardButton(text="⛔ Перм. бан", callback_data=f"ban:{reported_user_id}")
+        ],
+        [
+            InlineKeyboardButton(text="❌ Отклонить жалобу", callback_data=f"reject:{reporter_id}")
+        ]
+    ])
+    
+    # Отправка с скриншотом или без
+    try:
+        if screenshot_file_id:
+            await bot.send_photo(
+                chat_id=ADMINS[0],
+                photo=screenshot_file_id,
+                caption=text,
+                reply_markup=kb
+            )
+        else:
+            await bot.send_message(
+                chat_id=ADMINS[0],
+                text=text,
+                reply_markup=kb
+            )
+    except Exception as e:
+        logging.error(f"Ошибка уведомления админа: {e}")
+
+# --- Обработка действий админа ---
+@dp.callback_query(F.data.startswith("warn:"))
+@dp.callback_query(F.data.startswith("tempban:"))
+@dp.callback_query(F.data.startswith("ban:"))
+@dp.callback_query(F.data.startswith("reject:"))
+async def handle_admin_action(callback: CallbackQuery):
+    action, *data = callback.data.split(":")
+    admin_id = callback.from_user.id
+    
+    if admin_id not in ADMINS:
+        return await callback.answer("❌ Ты не админ!")
+    
+    # Предупреждение
+    if action == "warn":
+        user_id = int(data[0])
+        await add_warning(user_id)
+        await callback.answer("⚠️ Пользователь предупреждён")
+        await bot.send_message(user_id, "Вам вынесено предупреждение за нарушение правил!")
+    
+    # Временный бан
+    elif action == "tempban":
+        days = int(data[0])
+        user_id = int(data[1])
+        await temp_ban_user(user_id, days)
+        await callback.answer(f"⏳ Пользователь забанен на {days} дней")
+        await bot.send_message(
+            user_id, 
+            f"⛔ Ваш аккаунт заблокирован на {days} дней за нарушение правил!"
+        )
+    
+    # Перманентный бан
+    elif action == "ban":
+        user_id = int(data[0])
+        await perm_ban_user(user_id)
+        await callback.answer("⛔ Пользователь забанен навсегда")
+        await bot.send_message(user_id, "⛔ Ваш аккаунт заблокирован навсегда!")
+    
+    # Отклонение жалобы
+    elif action == "reject":
+        reporter_id = int(data[0])
+        await callback.answer("❌ Жалоба отклонена")
+        await bot.send_message(
+            reporter_id, 
+            "❌ Ваша жалоба отклонена администратором. "
+            "Пожалуйста, убедитесь в обоснованности жалоб."
+        )
+    
+    # Удаляем клавиатуру
+    await callback.message.edit_reply_markup()
+
+# --- Система наказаний ---
+async def add_warning(user_id: int):
+    async with pool.acquire() as conn:
+        # Добавляем предупреждение
+        await conn.execute("""
+            INSERT INTO user_punishments (user_id, warnings)
+            VALUES ($1, 1)
+            ON CONFLICT (user_id) DO UPDATE
+            SET warnings = user_punishments.warnings + 1
+        """, user_id)
+        
+        # Проверяем лимит предупреждений
+        warnings = await conn.fetchval(
+            "SELECT warnings FROM user_punishments WHERE user_id = $1", 
+            user_id
+        )
+        
+        if warnings >= 3:
+            await temp_ban_user(user_id, 1)
+
+async def temp_ban_user(user_id: int, days: int):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_punishments (user_id, banned_until)
+            VALUES ($1, NOW() + INTERVAL '$2 days')
+            ON CONFLICT (user_id) DO UPDATE
+            SET banned_until = NOW() + INTERVAL '$2 days'
+        """, user_id, days)
+
+async def perm_ban_user(user_id: int):
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO user_punishments (user_id, banned_until)
+            VALUES ($1, '9999-12-31'::timestamp)
+            ON CONFLICT (user_id) DO UPDATE
+            SET banned_until = '9999-12-31'::timestamp
+        """, user_id)
+
+# --- Проверка бана при старте ---
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверка бана
+    async with pool.acquire() as conn:
+        ban_info = await conn.fetchrow(
+            "SELECT banned_until FROM user_punishments WHERE user_id = $1", 
+            user_id
+        )
+    
+    if ban_info:
+        ban_date = ban_info['banned_until']
+        if ban_date > datetime.now():
+            if ban_date.year == 9999:
+                text = "⛔ Ваш аккаунт заблокирован навсегда!"
+            else:
+                text = f"⏳ Ваш аккаунт заблокирован до {ban_date.strftime('%d.%m.%Y %H:%M')}!"
+            return await message.answer(text)
+    
+    # ... остальная логика старта ...
+
+# --- Проверка бана перед поиском ---
+@dp.message(Command("search"))
+async def start_search(message: Message):
+    user_id = message.from_user.id
+    
+    # Проверка бана
+    async with pool.acquire() as conn:
+        is_banned = await conn.fetchval(
+            "SELECT 1 FROM user_punishments "
+            "WHERE user_id = $1 AND banned_until > NOW()",
+            user_id
+        )
+    
+    if is_banned:
+        return await message.answer("⛔ Вы не можете искать собеседников: ваш аккаунт заблокирован.")
+
+
+
+
 
 
 @dp.message(Command("info"))
