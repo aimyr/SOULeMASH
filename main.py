@@ -712,27 +712,33 @@ async def cmd_report(message: Message):
     if user_id not in active_chats:
         return await message.answer("❌ Жалобу можно отправить только во время диалога.")
     
-    # Запрос причины с более четкими инструкциями
+    # Создаем клавиатуру с кнопкой отмены
+    cancel_kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Отменить жалобу")]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    
+    # Запрос причины
     await message.answer(
-        "🚨 <b>Отправьте причину жалобы одним сообщением:</b>\n\n"
+        "🚨 <b>Отправьте причину жалобы:</b>\n\n"
         "Вы можете:\n"
-        "1. Написать текст причины\n"
-        "2. Отправить скриншот с подписью (текст под скриншотом)\n"
-        "3. Отправить отдельно текст и скриншот\n\n"
+        "- Написать текст причины\n"
+        "- Отправить скриншот с подписью\n"
+        "- Отправить отдельно текст и скриншот\n\n"
         "<b>Примеры причин:</b>\n"
         "- Отправляет спам/рекламу\n"
         "- Присылает оскорбления\n"
-        "- Ведет себя подозрительно\n"
-        "- Нарушает правила чата",
-        reply_markup=ReplyKeyboardRemove()
+        "- Ведет себя подозрительно",
+        reply_markup=cancel_kb
     )
     
     # Сохраняем минимальные данные
     active_reports[user_id] = {
         "reported_user_id": active_chats[user_id],
         "message_id": message.message_id,
-        "reason": None,  # Для сбора текста причины
-        "screenshot": None  # Для сбора скриншота
+        "reason": None,
+        "screenshot": None
     }
 
 # --- Обработка жалобы ---
@@ -743,6 +749,12 @@ async def handle_report_content(message: Message):
     user_id = message.from_user.id
     report_data = active_reports[user_id]
     
+    # Обработка отмены
+    if message.text == "❌ Отменить жалобу":
+        del active_reports[user_id]
+        await message.answer("❌ Отправка жалобы отменена.", reply_markup=main_menu)
+        return
+    
     # Обработка текста (обычное сообщение или подпись к фото)
     if message.text or message.caption:
         text_content = message.text or message.caption
@@ -750,7 +762,7 @@ async def handle_report_content(message: Message):
         # Если это первое текстовое сообщение - сохраняем как причину
         if report_data["reason"] is None:
             report_data["reason"] = text_content
-            await message.answer("✅ Текст причины сохранён. Теперь можете отправить скриншот (если нужно).")
+            await message.answer("✅ Текст причины сохранён. Теперь можете отправить скриншот.")
         else:
             # Если уже есть причина - добавляем к ней
             report_data["reason"] += f"\n\nДополнение: {text_content}"
@@ -806,16 +818,6 @@ async def handle_report_content(message: Message):
         )
         
         del active_reports[user_id]
-
-# --- Команда отмены репорта ---
-@dp.message(Command("cancel_report"))
-async def cmd_cancel_report(message: Message):
-    user_id = message.from_user.id
-    if user_id in active_reports:
-        del active_reports[user_id]
-        await message.answer("❌ Отправка жалобы отменена.", reply_markup=main_menu)
-    else:
-        await message.answer("❌ У вас нет активной жалобы для отмены.")
 
 # --- Обработка обычных сообщений с учетом репортов ---
 @dp.message(F.content_type.in_({"text", "sticker", "photo", "animation", "voice", "audio", "video", "document"}))
