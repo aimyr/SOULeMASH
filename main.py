@@ -732,11 +732,9 @@ async def cmd_report(message: Message):
 # --- Обработка жалобы ---
 active_reports = {}
 
-@dp.message(F.content_type.in_({"text", "photo", "document"}))
+@dp.message(F.content_type.in_({"text", "photo", "document"}), lambda msg: msg.from_user.id in active_reports)
 async def handle_report_content(message: Message):
     user_id = message.from_user.id
-    if user_id not in active_reports:
-        return
     
     report_data = active_reports[user_id]
     reason = message.text or "Причина не указана"
@@ -758,7 +756,8 @@ async def handle_report_content(message: Message):
     
     # Завершаем диалог
     partner_id = active_chats.pop(user_id)
-    active_chats.pop(partner_id, None)
+    if partner_id in active_chats:
+        active_chats.pop(partner_id)
     
     # Уведомления
     await message.answer(
@@ -784,6 +783,24 @@ async def handle_report_content(message: Message):
     
     del active_reports[user_id]
 
+# --- Обработка обычных сообщений ---
+@dp.message(F.content_type.in_({"text", "sticker", "photo", "animation", "voice", "audio", "video", "document"}))
+async def relay_message(message: Message):
+    user_id = message.from_user.id
+    partner_id = active_chats.get(user_id)
+
+    if not partner_id:
+        # Если не в чате, но пытается отправить сообщение
+        if user_id not in active_reports:
+            await message.answer("❗ У вас нет активного собеседника. Напишите /search чтобы найти кого-то.")
+        return
+
+    # Регистрируем пользователя, если он ещё не в БД
+    await register_user(pool, message.from_user)
+
+    # Пересылаем сообщение и увеличиваем счётчик
+    await bot.copy_message(chat_id=partner_id, from_chat_id=message.chat.id, message_id=message.message_id)
+    await increment_messages(pool, user_id)
 # --- Уведомление админов ---
 async def notify_admins(reporter_id: int, reported_user_id: int, reason: str, screenshot_file_id: str = None):
     text = (
