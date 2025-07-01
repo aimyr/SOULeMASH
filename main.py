@@ -702,7 +702,16 @@ search_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-
+@dp.message(Command("stopsearch"))
+async def stop_search(message: Message):
+    user_id = message.from_user.id
+    if user_id in searching:
+        await matchmaker.remove_user(user_id)
+        searching.discard(user_id)
+        await message.answer("🔕 Поиск остановлен.", reply_markup=main_menu)
+    else:
+        await message.answer("Вы сейчас не ищете собеседника.")
+        
 # --- Команда репорта ---
 @dp.message(Command("report"))
 async def cmd_report(message: Message):
@@ -1094,17 +1103,6 @@ async def start_search(message: Message, state: FSMContext):
     
 
     
-
-
-@dp.message(Command("stopsearch"))
-async def stop_search(message: Message):
-    user_id = message.from_user.id
-    if user_id in searching:
-        await matchmaker.remove_user(user_id)
-        searching.discard(user_id)
-        await message.answer("🔕 Поиск остановлен.", reply_markup=main_menu)
-    else:
-        await message.answer("Вы сейчас не ищете собеседника.")
 
 @dp.message(Command("stop"))
 async def stop(message: Message):
