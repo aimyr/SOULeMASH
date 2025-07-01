@@ -712,21 +712,27 @@ async def cmd_report(message: Message):
     if user_id not in active_chats:
         return await message.answer("❌ Жалобу можно отправить только во время диалога.")
     
-    # Запрос причины
+    # Запрос причины с более четкими инструкциями
     await message.answer(
-        "📝 Напишите причину жалобы одним сообщением:\n"
-        "Примеры:\n"
-        "- 'Отправляет спам'\n"
-        "- 'Присылает оскорбления'\n"
-        "- 'Ведет себя подозрительно'\n\n"
-        "Можно прикрепить скриншот к этому сообщению",
+        "🚨 <b>Отправьте причину жалобы одним сообщением:</b>\n\n"
+        "Вы можете:\n"
+        "1. Написать текст причины\n"
+        "2. Отправить скриншот с подписью (текст под скриншотом)\n"
+        "3. Отправить отдельно текст и скриншот\n\n"
+        "<b>Примеры причин:</b>\n"
+        "- Отправляет спам/рекламу\n"
+        "- Присылает оскорбления\n"
+        "- Ведет себя подозрительно\n"
+        "- Нарушает правила чата",
         reply_markup=ReplyKeyboardRemove()
     )
     
     # Сохраняем минимальные данные
     active_reports[user_id] = {
         "reported_user_id": active_chats[user_id],
-        "message_id": message.message_id
+        "message_id": message.message_id,
+        "reason": None,  # Для сбора текста причины
+        "screenshot": None  # Для сбора скриншота
     }
 
 # --- Обработка жалобы ---
@@ -735,64 +741,95 @@ active_reports = {}
 @dp.message(F.content_type.in_({"text", "photo", "document"}), lambda msg: msg.from_user.id in active_reports)
 async def handle_report_content(message: Message):
     user_id = message.from_user.id
-    
     report_data = active_reports[user_id]
-    reason = message.text or "Причина не указана"
-    screenshot = None
     
-    # Извлекаем скриншот если есть
+    # Обработка текста (обычное сообщение или подпись к фото)
+    if message.text or message.caption:
+        text_content = message.text or message.caption
+        
+        # Если это первое текстовое сообщение - сохраняем как причину
+        if report_data["reason"] is None:
+            report_data["reason"] = text_content
+            await message.answer("✅ Текст причины сохранён. Теперь можете отправить скриншот (если нужно).")
+        else:
+            # Если уже есть причина - добавляем к ней
+            report_data["reason"] += f"\n\nДополнение: {text_content}"
+            await message.answer("✅ Дополнительный текст добавлен к причине.")
+    
+    # Обработка скриншота
     if message.photo:
-        screenshot = message.photo[-1].file_id
+        report_data["screenshot"] = message.photo[-1].file_id
+        await message.answer("✅ Скриншот сохранён.")
     elif message.document:
-        screenshot = message.document.file_id
+        report_data["screenshot"] = message.document.file_id
+        await message.answer("✅ Файл сохранён как доказательство.")
     
-    # Сохраняем в базу
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO reports (reporter_id, reported_user_id, reason, screenshot_file_id) "
-            "VALUES ($1, $2, $3, $4)",
-            user_id, report_data["reported_user_id"], reason, screenshot
+    # Если причина не указана - напоминаем
+    if report_data["reason"] is None:
+        return await message.answer("❌ Пожалуйста, укажите текст причины жалобы.")
+    
+    # Если пользователь отправил и текст, и скриншот - завершаем обработку
+    if report_data["reason"] is not None:
+        # Сохраняем в базу
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO reports (reporter_id, reported_user_id, reason, screenshot_file_id) "
+                "VALUES ($1, $2, $3, $4)",
+                user_id, report_data["reported_user_id"], report_data["reason"], report_data["screenshot"]
+            )
+        
+        # Завершаем диалог
+        partner_id = active_chats.pop(user_id)
+        if partner_id in active_chats:
+            active_chats.pop(partner_id)
+        
+        # Уведомления
+        await message.answer(
+            "✅ Жалоба отправлена! Диалог завершён.\n"
+            f"Администратор рассмотрит её в течение 24 часов.",
+            reply_markup=main_menu
         )
-    
-    # Завершаем диалог
-    partner_id = active_chats.pop(user_id)
-    if partner_id in active_chats:
-        active_chats.pop(partner_id)
-    
-    # Уведомления
-    await message.answer(
-        "✅ Жалоба отправлена! Диалог завершен.\n"
-        f"Администратор рассмотрит её в течение 24 часов.",
-        reply_markup=main_menu
-    )
-    
-    await bot.send_message(
-        partner_id,
-        "⚠️ Диалог завершен по жалобе собеседника.\n"
-        f"Если это ошибка, напишите {SUPPORT_USERNAME}",
-        reply_markup=main_menu
-    )
-    
-    # Уведомление админам
-    await notify_admins(
-        reporter_id=user_id,
-        reported_user_id=partner_id,
-        reason=reason,
-        screenshot_file_id=screenshot
-    )
-    
-    del active_reports[user_id]
+        
+        await bot.send_message(
+            partner_id,
+            "⚠️ Диалог завершён по жалобе собеседника.\n"
+            f"Если это ошибка, напишите {SUPPORT_USERNAME}",
+            reply_markup=main_menu
+        )
+        
+        # Уведомление админам
+        await notify_admins(
+            reporter_id=user_id,
+            reported_user_id=partner_id,
+            reason=report_data["reason"],
+            screenshot_file_id=report_data["screenshot"]
+        )
+        
+        del active_reports[user_id]
 
-# --- Обработка обычных сообщений ---
+# --- Команда отмены репорта ---
+@dp.message(Command("cancel_report"))
+async def cmd_cancel_report(message: Message):
+    user_id = message.from_user.id
+    if user_id in active_reports:
+        del active_reports[user_id]
+        await message.answer("❌ Отправка жалобы отменена.", reply_markup=main_menu)
+    else:
+        await message.answer("❌ У вас нет активной жалобы для отмены.")
+
+# --- Обработка обычных сообщений с учетом репортов ---
 @dp.message(F.content_type.in_({"text", "sticker", "photo", "animation", "voice", "audio", "video", "document"}))
 async def relay_message(message: Message):
     user_id = message.from_user.id
+    
+    # Если пользователь в процессе репорта - пропускаем обычную обработку
+    if user_id in active_reports:
+        return
+    
     partner_id = active_chats.get(user_id)
 
     if not partner_id:
-        # Если не в чате, но пытается отправить сообщение
-        if user_id not in active_reports:
-            await message.answer("❗ У вас нет активного собеседника. Напишите /search чтобы найти кого-то.")
+        await message.answer("❗ У вас нет активного собеседника. Напишите /search чтобы найти кого-то.")
         return
 
     # Регистрируем пользователя, если он ещё не в БД
@@ -801,6 +838,8 @@ async def relay_message(message: Message):
     # Пересылаем сообщение и увеличиваем счётчик
     await bot.copy_message(chat_id=partner_id, from_chat_id=message.chat.id, message_id=message.message_id)
     await increment_messages(pool, user_id)
+
+
 # --- Уведомление админов ---
 async def notify_admins(reporter_id: int, reported_user_id: int, reason: str, screenshot_file_id: str = None):
     text = (
@@ -980,7 +1019,7 @@ async def info(message: Message):
     total_messages = await get_user_message_count(pool, message.from_user.id)
     await message.answer(
         f"SOULeMESH — анонимный бот для душевных разговоров.\n"
-        f"ИИ в будущем будет подбирать собеседников по интересам и психотипу."
+        f"ИИ подбирает собеседников по интересам и психотипу."
     )
 
 @dp.message(Command("search"))
@@ -1162,7 +1201,8 @@ async def setup_bot_commands():
         BotCommand(command="stop", description="Завершить чат"),
         BotCommand(command="next", description="Следующий собеседник"),
         BotCommand(command="info", description="О боте"),
-        BotCommand(command="me", description="Ваша статистика")
+        BotCommand(command="me", description="Ваша статистика"),
+        BotCommand(command="report", description="Пожаловаться на собеседника")
     ])
 
 async def main():
