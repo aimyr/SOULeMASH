@@ -997,43 +997,6 @@ async def is_user_banned(user_id: int) -> bool:
             )
         """, user_id)
 
-# --- Проверка бана при старте (исправленная) ---
-@dp.message(Command("start"))
-async def cmd_start(message: Message):
-    user_id = message.from_user.id
-    
-    # Проверка бана
-    if await is_user_banned(user_id):
-        # Получаем информацию о бане
-        async with pool.acquire() as conn:
-            ban_info = await conn.fetchrow(
-                "SELECT banned_until FROM user_punishments WHERE user_id = $1", 
-                user_id
-            )
-        
-        if ban_info and ban_info['banned_until']:
-            ban_date = ban_info['banned_until']
-            if ban_date.year == 9999:
-                return await message.answer("⛔ Ваш аккаунт заблокирован навсегда!")
-            else:
-                return await message.answer(
-                    f"⏳ Ваш аккаунт заблокирован до {ban_date.strftime('%d.%m.%Y %H:%M')}!"
-                )
-        else:
-            return await message.answer("⛔ Ваш аккаунт заблокирован!")
-    
-    # ... остальная логика старта ...
-
-# --- Проверка бана перед поиском (исправленная) ---
-@dp.message(Command("search"))
-async def start_search(message: Message, state: FSMContext):
-    user_id = message.from_user.id
-    
-    # Проверка бана
-    if await is_user_banned(user_id):
-        return await message.answer("⛔ Вы не можете искать собеседников: ваш аккаунт заблокирован.")
-    
-    # ... остальная логика поиска ...
 
 # --- Глобальный middleware для проверки бана ---
 @dp.update.outer_middleware()
@@ -1070,6 +1033,27 @@ async def info(message: Message):
 @dp.message(Command("search"))
 async def start_search(message: Message, state: FSMContext):
     user_id = message.from_user.id
+    # Проверка бана
+    if await is_user_banned(user_id):
+        # Получаем информацию о бане
+        async with pool.acquire() as conn:
+            ban_info = await conn.fetchrow(
+                "SELECT banned_until FROM user_punishments WHERE user_id = $1", 
+                user_id
+            )
+        
+        if ban_info and ban_info['banned_until']:
+            ban_date = ban_info['banned_until']
+            if ban_date.year == 9999:
+                return await message.answer("⛔ Ваш аккаунт заблокирован навсегда!")
+            else:
+                return await message.answer(
+                    f"⏳ Ваш аккаунт заблокирован до {ban_date.strftime('%d.%m.%Y %H:%M')}!"
+                )
+        else:
+            return await message.answer("⛔ Ваш аккаунт заблокирован!")
+
+
     
     # Проверка, что пользователь уже в чате
     if user_id in active_chats:
@@ -1159,6 +1143,26 @@ async def stop(message: Message):
 @dp.message(Command("next"))
 async def next_chat(message: Message, state: FSMContext):
     user_id = message.from_user.id
+
+    # Проверка бана
+    if await is_user_banned(user_id):
+        # Получаем информацию о бане
+        async with pool.acquire() as conn:
+            ban_info = await conn.fetchrow(
+                "SELECT banned_until FROM user_punishments WHERE user_id = $1", 
+                user_id
+            )
+        
+        if ban_info and ban_info['banned_until']:
+            ban_date = ban_info['banned_until']
+            if ban_date.year == 9999:
+                return await message.answer("⛔ Ваш аккаунт заблокирован навсегда!")
+            else:
+                return await message.answer(
+                    f"⏳ Ваш аккаунт заблокирован до {ban_date.strftime('%d.%m.%Y %H:%M')}!"
+                )
+        else:
+            return await message.answer("⛔ Ваш аккаунт заблокирован!")
     
     # Получаем данные состояния
     user_data = await state.get_data()
