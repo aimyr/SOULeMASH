@@ -955,12 +955,13 @@ async def add_warning(user_id: int):
 
 async def temp_ban_user(user_id: int, days: int):
     async with pool.acquire() as conn:
+        # Используем правильный синтаксис для интервала
         await conn.execute("""
             INSERT INTO user_punishments (user_id, banned_until)
-            VALUES ($1, NOW() + INTERVAL '$2 days')
+            VALUES ($1, NOW() + INTERVAL '%s days')
             ON CONFLICT (user_id) DO UPDATE
-            SET banned_until = NOW() + INTERVAL '$2 days'
-        """, user_id, days)
+            SET banned_until = NOW() + INTERVAL '%s days'
+        """ % (days, days), user_id)
 
 async def perm_ban_user(user_id: int):
     async with pool.acquire() as conn:
@@ -970,7 +971,6 @@ async def perm_ban_user(user_id: int):
             ON CONFLICT (user_id) DO UPDATE
             SET banned_until = '9999-12-31'::timestamp
         """, user_id)
-
 # --- Проверка бана при старте ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
