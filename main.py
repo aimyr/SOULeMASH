@@ -616,13 +616,6 @@ async def handle_social_input(message: Message, state: FSMContext):
         )
         return
     
-    # Проверка допустимых символов (опционально)
-    if not re.match(r"^@[a-zA-Z0-9_.]+$", username):
-        await message.answer(
-            "⚠️ Недопустимые символы! Разрешены только буквы, цифры, точки и подчёркивания\n\n"
-            f"Пожалуйста, введи правильный @{social_type} ник:"
-        )
-        return
     
     # Сохранение в базу
     value = f"{social_type}: {username}"
