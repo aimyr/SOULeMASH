@@ -679,7 +679,7 @@ async def require_registration(message: Message, state: FSMContext):
     elif message.text == "/me":
         await me(message)
     elif message.text == "/next":
-        await next_chat(message)
+        await next_chat(message, state)
     elif message.text == "/stop":
         await stop(message)
 
