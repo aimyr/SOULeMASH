@@ -722,10 +722,9 @@ async def cmd_report(message: Message):
     # Запрос причины
     await message.answer(
         "🚨 <b>Отправьте причину жалобы:</b>\n\n"
-        "Вы можете:\n"
+        "Вы можете(одно из двух):\n"
         "- Написать текст причины\n"
-        "- Отправить скриншот с подписью\n"
-        "- Отправить отдельно текст и скриншот\n\n"
+        "- Отправить скриншот с подписью(желательно это)\n"
         "<b>Примеры причин:</b>\n"
         "- Отправляет спам/рекламу\n"
         "- Присылает оскорбления\n"
@@ -762,7 +761,7 @@ async def handle_report_content(message: Message):
         # Если это первое текстовое сообщение - сохраняем как причину
         if report_data["reason"] is None:
             report_data["reason"] = text_content
-            await message.answer("✅ Текст причины сохранён. Теперь можете отправить скриншот.")
+            await message.answer("✅ Текст причины сохранён.")
         else:
             # Если уже есть причина - добавляем к ней
             report_data["reason"] += f"\n\nДополнение: {text_content}"
@@ -1116,34 +1115,71 @@ async def stop(message: Message):
 @dp.message(Command("next"))
 async def next_chat(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    user_data = await state.get_data()  # ✅ Вот этого не хватает
+    
+    # Получаем данные состояния
+    user_data = await state.get_data()
+    
+    # Проверка отказа от анкеты
     if user_data.get("denied"):
         await message.answer(
-            "❌ Ты отказался от анкеты и не можешь пользоваться этой командой. Напиши /start, чтобы вернуться.")
+            "❌ Ты отказался от анкеты и не можешь пользоваться этой командой. "
+            "Напиши /start, чтобы вернуться."
+        )
         return
 
-        # здесь может быть проверка профиля из БД, если хочешь:
-    has_profile = await user_has_profile(pool, message.from_user.id)
+    # Проверка заполнения профиля
+    async with pool.acquire() as conn:
+        has_profile = await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM user_profiles WHERE user_id = $1 AND social IS NOT NULL)",
+            user_id
+        )
+    
     if not has_profile:
         await message.answer("❗️Ты не прошёл анкету. Напиши /start, чтобы пройти её.")
         return
 
+    # Завершение текущего чата
     if user_id in active_chats:
-        # При завершении предыдущего диалога также покажем цитату
         partner_id = active_chats[user_id]
-        await increment_full_chats(pool, user_id)
-        await increment_full_chats(pool, partner_id)
         
+        # Обновляем счетчики чатов
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE user_stats SET full_chats = full_chats + 1 WHERE user_id = $1",
+                    user_id
+                )
+                await conn.execute(
+                    "UPDATE user_stats SET full_chats = full_chats + 1 WHERE user_id = $1",
+                    partner_id
+                )
+        except Exception as e:
+            logging.error(f"Error updating chat stats: {e}")
+        
+        # Отправляем уведомление партнеру
         import random
         quote = random.choice(QUOTES)
         
-        await bot.send_message(
-            partner_id, 
-            f"👋 Собеседник перешёл к следующему\n\n{quote}\n\n/search — найти нового собеседника",
-            reply_markup=main_menu
-        )
-        active_chats.pop(user_id)
-        active_chats.pop(partner_id)
+        try:
+            await bot.send_message(
+                partner_id, 
+                f"👋 Собеседник перешёл к следующему\n\n{quote}\n\n/search — найти нового собеседника",
+                reply_markup=main_menu
+            )
+        except Exception as e:
+            logging.error(f"Error notifying partner {partner_id}: {e}")
+        
+        # Удаляем из активных чатов
+        active_chats.pop(user_id, None)
+        active_chats.pop(partner_id, None)
+    
+    # Удаляем из поиска если был там
+    if user_id in searching:
+        await matchmaker.remove_user(user_id)
+        searching.discard(user_id)
+    
+    # Очищаем состояние
+    await state.clear()
     
     # Начинаем новый поиск
     await start_search(message, state)
