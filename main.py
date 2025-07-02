@@ -524,14 +524,10 @@ async def handle_question(message: Message, state: FSMContext):
         await message.answer("🔥 Хочешь добавить свою соцсеть?\nВыбери одну:", reply_markup=keyboard)
 
         return
-    else:
-        # переход к следующему вопросу
-        await state.set_state(getattr(Questionnaire, f"q{state_index + 2}"))
-        qtext, opts = questions[state_index + 1]
-        await message.answer(format_question(questions[state_index + 1]))
-# Обработчик блокировки
+    
 @dp.message(StateFilter(Questionnaire.social_select))
 async def force_social_choice(message: Message):
+    # Просто игнорируем любые сообщения и снова показываем кнопки
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -540,11 +536,20 @@ async def force_social_choice(message: Message):
             ]
         ]
     )
+    
+    # Удаляем предыдущее сообщение пользователя (чтобы не засорять чат)
+    try:
+        await message.delete()
+    except:
+        pass
+    
+    # Показываем кнопки снова
     await message.answer(
-        "❗ Ты должен выбрать соцсеть!\n\n"
-        "Нажми одну из кнопок выше, чтобы продолжить.",
+        "❗ Выбери соцсеть для связи!\n\n"
+        "Нажми кнопку Instagram или TikTok. Другие действия не работают.",
         reply_markup=keyboard
     )
+
 
 
 @dp.callback_query(F.data.startswith("social_"), StateFilter(Questionnaire.social_select))
