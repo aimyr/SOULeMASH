@@ -524,6 +524,11 @@ async def handle_question(message: Message, state: FSMContext):
         await message.answer("🔥 Хочешь добавить свою соцсеть?\nВыбери одну:", reply_markup=keyboard)
 
         return
+    else:
+        # переход к следующему вопросу
+        await state.set_state(getattr(Questionnaire, f"q{state_index + 2}"))
+        qtext, opts = questions[state_index + 1]
+        await message.answer(format_question(questions[state_index + 1]))
     
 @dp.message(StateFilter(Questionnaire.social_select))
 async def force_social_choice(message: Message):
