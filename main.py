@@ -529,6 +529,23 @@ async def handle_question(message: Message, state: FSMContext):
         await state.set_state(getattr(Questionnaire, f"q{state_index + 2}"))
         qtext, opts = questions[state_index + 1]
         await message.answer(format_question(questions[state_index + 1]))
+# Обработчик блокировки
+@dp.message(StateFilter(Questionnaire.social_select))
+async def force_social_choice(message: Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📸 Instagram", callback_data="social_instagram"),
+                InlineKeyboardButton(text="🎵 TikTok", callback_data="social_tiktok")
+            ]
+        ]
+    )
+    await message.answer(
+        "❗ Ты должен выбрать соцсеть!\n\n"
+        "Нажми одну из кнопок выше, чтобы продолжить.",
+        reply_markup=keyboard
+    )
+
 
 @dp.callback_query(F.data.startswith("social_"), StateFilter(Questionnaire.social_select))
 async def handle_social_choice(callback: CallbackQuery, state: FSMContext):
