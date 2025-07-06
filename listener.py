@@ -130,12 +130,24 @@ async def on_notify(_, __, ___, payload: str):
                 n_items            = 3,
             )
             print("  ✔ traits built")
+            desc_resp = openai.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                  {"role": "system", "content": "Опиши этого пользователя одним абзацем на русском, основываясь на его психологическом профиле."},
+                  {"role": "user",   "content": json.dumps(traits, ensure_ascii=False)}
+                ]
+            )
+            profile_description = desc_resp.choices[0].message.content.strip()
 
-            args = [user_id] + [traits.get(k, 0.0) for k in NUM_COLS] + [
-                traits.get("languages", []),
-                traits.get("timezone"),
-                traits.get("preferred_format"),
-            ]
+            # 2. Build args for UPSERT
+            args = [ user_id ] \
+                 + [ traits.get(k, 0.0) for k in NUM_COLS ] \
+                 + [ traits.get("languages", []),
+                     traits.get("timezone"),
+                     traits.get("preferred_format"),
+                     profile_description   # ← new
+                   ]
+
             await c.execute(UPSERT_SQL, *args)
             print(f"  ✔ upsert OK for {user_id}")
 
