@@ -267,6 +267,22 @@ def row_to_profile(row):
     profile["preferred_match"] = row.get("preferred_match", "similar")
     return profile
 
+async def fetch_embedding_row(user_id: int):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            "SELECT * FROM user_embeddings WHERE user_id = $1",
+            user_id
+        )
+
+def format_profile(row) -> str:
+    profile = row_to_profile(row)
+    vec = row_to_vector(row)
+    lines = ["<b>Психологический профиль:</b>"]
+    for trait, val in profile.items():
+        lines.append(f"{trait.capitalize()}: {val:.2f}")
+    lines.append("\n<b>Embedding-вектор (первые 10 значений):</b>")
+    lines.append(" ".join(f"{x:.4f}" for x in vec[:10]) + " …")
+    return "\n".join(lines)
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
     resize_keyboard=True
@@ -738,7 +754,25 @@ async def stop_search(message: Message):
         await message.answer("🔕 Поиск остановлен.", reply_markup=main_menu)
     else:
         await message.answer("Вы сейчас не ищете собеседника.")
-        
+# see profile
+@dp.message(Command("myprofile"))
+async def cmd_myprofile(message: Message):
+    row = await fetch_embedding_row(message.from_user.id)
+    if not row:
+        return await message.answer("❌ Ваш профиль ещё не готов или не найден.")
+    await message.answer(format_profile(row), parse_mode=ParseMode.HTML)
+
+@dp.message(Command("theirprofile"))
+async def cmd_theirprofile(message: Message):
+    user_id = message.from_user.id
+    partner_id = active_chats.get(user_id)
+    if not partner_id:
+        return await message.answer("❌ У вас нет активного собеседника.")
+    row = await fetch_embedding_row(partner_id)
+    if not row:
+        return await message.answer("❌ Профиль вашего собеседника не найден.")
+    await message.answer(format_profile(row), parse_mode=ParseMode.HTML)
+     
 # --- Команда репорта ---
 @dp.message(Command("report"))
 async def cmd_report(message: Message):
@@ -1313,7 +1347,9 @@ async def setup_bot_commands():
         BotCommand(command="next", description="Следующий собеседник"),
         BotCommand(command="info", description="О боте"),
         BotCommand(command="me", description="Ваша статистика"),
-        BotCommand(command="report", description="Пожаловаться на собеседника")
+        BotCommand(command="report", description="Пожаловаться на собеседника"),
+        BotCommand(command="myprofile", description="Показать ваш профиль"),
+        BotCommand(command="theirprofile", description="Показать профиль партнёра")
     ])
 
 async def main():
