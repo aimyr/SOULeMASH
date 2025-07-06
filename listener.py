@@ -46,13 +46,19 @@ END$$;
 """
 
 # ---------- helpers ----------
+EXTRA_COLS = ["languages", "timezone", "preferred_format", "profile_description"]
+
 def build_upsert_sql() -> str:
-    cols = ["user_id"] + NUM_COLS + ["languages","timezone","preferred_format"]
-    col_list = ", ".join(cols) + ", updated_at"
-    val_list = ", ".join(f"${i+1}" for i in range(len(cols))) + ", now()"
-    upd_list = ", ".join(f"{c}=EXCLUDED.{c}" for c in cols[1:]) + ", updated_at=now()"
-    return f"INSERT INTO {TARGET_TABLE} ({col_list}) VALUES ({val_list}) " \
-           f"ON CONFLICT (user_id) DO UPDATE SET {upd_list};"
+    # all numeric + extra + updated_at
+    cols      = ["user_id"] + NUM_COLS + EXTRA_COLS
+    col_list  = ", ".join(cols) + ", updated_at"
+    val_list  = ", ".join(f"${i+1}" for i in range(len(cols))) + ", now()"
+    upd_list  = ", ".join(f"{c}=EXCLUDED.{c}" for c in cols[1:]) + ", updated_at=now()"
+    return f"""
+      INSERT INTO {TARGET_TABLE} ({col_list})
+      VALUES ({val_list})
+      ON CONFLICT (user_id) DO UPDATE SET {upd_list};
+    """
 
 UPSERT_SQL = build_upsert_sql()
 
