@@ -276,13 +276,28 @@ async def fetch_embedding_row(user_id: int):
 
 def format_profile(row) -> str:
     profile = row_to_profile(row)
-    vec = row_to_vector(row)
+    vec     = row_to_vector(row)
+
     lines = ["<b>Психологический профиль:</b>"]
-    for trait, val in profile.items():
+
+    # — numeric traits first:
+    for trait in PSYCHO_TRAITS:
+        val = profile.get(trait, 0.5)
+        # val is guaranteed to be float per row_to_profile
         lines.append(f"{trait.capitalize()}: {val:.2f}")
+
+    # — the “preferred_match” is a string, show it plainly:
+    pref = profile.get("preferred_match", "—")
+    lines.append(f"\n<b>Предпочтение по типу собеседника:</b> {pref}")
+
+    # — then the raw embedding (first 10 dims to keep it tidy):
     lines.append("\n<b>Embedding-вектор (первые 10 значений):</b>")
     lines.append(" ".join(f"{x:.4f}" for x in vec[:10]) + " …")
+
     return "\n".join(lines)
+
+
+
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
     resize_keyboard=True
