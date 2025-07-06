@@ -40,46 +40,6 @@ class Matchmaker:
         self.task = None
 
 
-    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-        """Compute cosine similarity between two vectors."""
-        norm_a = np.linalg.norm(a)
-        norm_b = np.linalg.norm(b)
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-        return float(np.dot(a, b) / (norm_a * norm_b))
-
-    async def find_similar_users(user_id: int, top_n: int = 3):
-        """
-        Fetch all other users' embeddings, compute cosine similarity
-        against the current user, and return top_n sorted by similarity.
-        Returns list of tuples: (other_user_id, similarity, row).
-        """
-        # 1. Load this user's embedding
-        me = await fetch_embedding_row(user_id)
-        if not me:
-            return []
-        my_vec = row_to_vector(me)
-
-        # 2. Load everyone else
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT * FROM user_embeddings WHERE user_id != $1",
-                user_id
-            )
-
-          # 3. Compute similarities
-        sims = []
-        for row in rows:
-            other_id = row["user_id"]
-            vec      = row_to_vector(row)
-            sim      = cosine_similarity(my_vec, vec)
-            sims.append((other_id, sim, row))
-
-        # 4. Sort & slice
-        sims.sort(key=lambda x: x[1], reverse=True)
-        return sims[:top_n]
-
-
     # Добавляем функцию расчета совместимости как статический метод класса
     @staticmethod
     def calculate_compatibility(user1, user2):
@@ -232,6 +192,48 @@ class Matchmaker:
                 )
             
             return matches
+
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    """Compute cosine similarity between two vectors."""
+    norm_a = np.linalg.norm(a)
+    norm_b = np.linalg.norm(b)
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return float(np.dot(a, b) / (norm_a * norm_b))
+
+
+async def find_similar_users(user_id: int, top_n: int = 3):
+    """
+    Fetch all other users' embeddings, compute cosine similarity
+    against the current user, and return top_n sorted by similarity.
+    Returns list of tuples: (other_user_id, similarity, row).
+    """
+    # 1. Load this user's embedding
+    me = await fetch_embedding_row(user_id)
+    if not me:
+        return []
+    my_vec = row_to_vector(me)
+
+    # 2. Load everyone else
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM user_embeddings WHERE user_id != $1",
+            user_id
+        )
+
+    # 3. Compute similarities
+    sims = []
+    for row in rows:
+        other_id = row["user_id"]
+        vec      = row_to_vector(row)
+        sim      = cosine_similarity(my_vec, vec)
+        sims.append((other_id, sim, row))
+
+    # 4. Sort & slice
+    sims.sort(key=lambda x: x[1], reverse=True)
+    return sims[:top_n]
+
+
 
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
