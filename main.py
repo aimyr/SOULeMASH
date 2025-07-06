@@ -39,6 +39,47 @@ class Matchmaker:
         self.lock = asyncio.Lock()
         self.task = None
 
+
+    def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+        """Compute cosine similarity between two vectors."""
+        norm_a = np.linalg.norm(a)
+        norm_b = np.linalg.norm(b)
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return float(np.dot(a, b) / (norm_a * norm_b))
+
+    async def find_similar_users(user_id: int, top_n: int = 3):
+        """
+        Fetch all other users' embeddings, compute cosine similarity
+        against the current user, and return top_n sorted by similarity.
+        Returns list of tuples: (other_user_id, similarity, row).
+        """
+        # 1. Load this user's embedding
+        me = await fetch_embedding_row(user_id)
+        if not me:
+            return []
+        my_vec = row_to_vector(me)
+
+        # 2. Load everyone else
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM user_embeddings WHERE user_id != $1",
+                user_id
+            )
+
+          # 3. Compute similarities
+        sims = []
+        for row in rows:
+            other_id = row["user_id"]
+            vec      = row_to_vector(row)
+            sim      = cosine_similarity(my_vec, vec)
+            sims.append((other_id, sim, row))
+
+        # 4. Sort & slice
+        sims.sort(key=lambda x: x[1], reverse=True)
+        return sims[:top_n]
+
+
     # Добавляем функцию расчета совместимости как статический метод класса
     @staticmethod
     def calculate_compatibility(user1, user2):
@@ -787,6 +828,70 @@ async def cmd_theirprofile(message: Message):
     if not row:
         return await message.answer("❌ Профиль вашего собеседника не найден.")
     await message.answer(format_profile(row), parse_mode=ParseMode.HTML)
+
+
+@dp.message(Command("recommend"))
+async def cmd_recommend(message: Message):
+    user_id = message.from_user.id
+
+    # Fetch top-3 similar users
+    recs = await find_similar_users(user_id, top_n=3)
+    if not recs:
+        return await message.answer("❌ Не удалось найти похожих пользователей.")
+
+    # Send each recommendation
+    for other_id, sim, row in recs:
+        profile_text = format_profile(row)
+
+        # Build a 42-line string for the full embedding
+        vec = row_to_vector(row)
+        embed_lines = "\n".join(f"{i+1:02d}: {v:.4f}" for i, v in enumerate(vec))
+
+        await message.answer(
+            f"👤 <b>Пользователь:</b> <code>{other_id}</code>\n"
+            f"🔗 <b>Сходство:</b> {sim*100:.1f}%\n\n"
+            f"{profile_text}\n\n"
+            f"<b>Полное embedding (42 dims):</b>\n"
+            f"<code>{embed_lines}</code>",
+            parse_mode=ParseMode.HTML
+        )
+
+    # Prompt for manual connect
+    await message.answer(
+        "Если хотите начать диалог с кем-то из этих пользователей, наберите:\n\n"
+        "<code>/connect &lt;user_id&gt;</code>",
+        parse_mode=ParseMode.HTML
+    )
+
+
+# ─── 3. /connect Command ─────────────────────────────────────────────────────
+
+@dp.message(Command("connect"))
+async def cmd_connect(message: Message):
+    parts = message.text.split()
+    if len(parts) != 2 or not parts[1].isdigit():
+        return await message.answer("Использование: /connect <user_id>")
+
+    target_id = int(parts[1])
+    me        = message.from_user.id
+
+    # Prevent self-connect
+    if target_id == me:
+        return await message.answer("❌ Нельзя подключиться к себе.")
+
+    # Pair immediately
+    active_chats[me]       = target_id
+    active_chats[target_id] = me
+
+    # Notify both sides
+    await message.answer("✅ Диалог начат! Напишите сообщение ниже…", reply_markup=ReplyKeyboardRemove())
+    await bot.send_message(
+        target_id,
+        f"👤 Пользователь <code>{me}</code> хочет с вами пообщаться!",
+        parse_mode=ParseMode.HTML,
+        reply_markup=main_menu
+    )
+
      
 # --- Команда репорта ---
 @dp.message(Command("report"))
@@ -1364,7 +1469,9 @@ async def setup_bot_commands():
         BotCommand(command="me", description="Ваша статистика"),
         BotCommand(command="report", description="Пожаловаться на собеседника"),
         BotCommand(command="myprofile", description="Показать ваш профиль"),
-        BotCommand(command="theirprofile", description="Показать профиль партнёра")
+        BotCommand(command="theirprofile", description="Показать профиль партнёра"),
+        BotCommand(command="recommend",   description="Получить 3 похожих профиля"),
+        BotCommand(command="connect",     description="Начать чат с указанным user_id")
     ])
 
 async def main():
