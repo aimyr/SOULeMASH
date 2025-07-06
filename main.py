@@ -320,13 +320,22 @@ async def fetch_embedding_row(user_id: int):
 def format_profile(row) -> str:
     profile = row_to_profile(row)
     vec     = row_to_vector(row)
+    desc    = row.get("profile_description") or "—"
 
-    lines = ["<b>Психологический профиль:</b>"]
+
+    lines = [
+      f"👤 Пользователь: {row['user_id']}",
+      f"🔗 Сходство: …",  # if you still need it
+      "",
+      "<b>Описание:</b>",
+      desc,
+      "",
+      "<b>Психологический профиль:</b>"
+    ]
 
     # — numeric traits first:
     for trait in PSYCHO_TRAITS:
-        val = profile.get(trait, 0.5)
-        # val is guaranteed to be float per row_to_profile
+        val = profile[trait]
         lines.append(f"{trait.capitalize()}: {val:.2f}")
 
     # — the “preferred_match” is a string, show it plainly:
