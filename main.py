@@ -16,7 +16,7 @@ from datetime import datetime
 from collections import deque
 import matplotlib.pyplot as plt
 import io
-
+import random 
 # ... остальной код ...
 
 from db import (
