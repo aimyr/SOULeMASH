@@ -202,35 +202,37 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (norm_a * norm_b))
 
 
-async def find_similar_users(user_id: int, top_n: int = 3):
-    """
-    Fetch all other users' embeddings, compute cosine similarity
-    against the current user, and return top_n sorted by similarity.
-    Returns list of tuples: (other_user_id, similarity, row).
-    """
-    # 1. Load this user's embedding
-    me = await fetch_embedding_row(user_id)
-    if not me:
-        return []
-    my_vec = row_to_vector(me)
 
-    # 2. Load everyone else
+async def find_similar_users(
+    user_id: int,
+    top_n: int = 5,
+    min_sim: float = 0.8,
+    interests: list[str] | None = None
+):
+    me_row = await fetch_embedding_row(user_id)
+    if not me_row: return []
+    me_vec = row_to_vector(me_row)
+
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM user_embeddings WHERE user_id != $1",
-            user_id
-        )
+        rows = await conn.fetch("SELECT * FROM user_embeddings WHERE user_id != $1", user_id)
 
-    # 3. Compute similarities
     sims = []
     for row in rows:
-        other_id = row["user_id"]
-        vec      = row_to_vector(row)
-        sim      = cosine_similarity(my_vec, vec)
-        sims.append((other_id, sim, row))
+        vec = row_to_vector(row)
+        sim = float(np.dot(me_vec, vec) / (np.linalg.norm(me_vec)*np.linalg.norm(vec)))
+        if sim < min_sim: continue
 
-    # 4. Sort & slice
+        # interest filtering: e.g. row['programming'] >= 0.5
+        if interests:
+            ok = any((row.get(interest.lower(), 0) or 0) >= 0.5 for interest in interests)
+            if not ok: continue
+
+        sims.append((row["user_id"], sim))
+
+    # shuffle to add randomness, then sort by sim descending
+    random.shuffle(sims)
     sims.sort(key=lambda x: x[1], reverse=True)
+
     return sims[:top_n]
 
 
@@ -349,6 +351,49 @@ def format_profile(row) -> str:
     return "\n".join(lines)
 
 
+async def update_profile_description(user_id: int):
+    """
+    Fetch the just-updated embedding_vector for user_id,
+    ask ChatGPT to generate a one-paragraph profile based on it,
+    and write that back into profile_description.
+    """
+    # 1️⃣ load the new embedding
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT embedding_vector FROM user_embeddings WHERE user_id = $1",
+            user_id
+        )
+    if not row:
+        return
+
+    embedding = row["embedding_vector"]
+
+    # 2️⃣ ask GPT for a natural-language description
+    desc_resp = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Ты — эксперт-психолог. Сформулируй одним абзацем на русском языке "
+                    "краткое описание пользователя на основе этого embedding-вектора. "
+                    "Каждая координата — это психологическая черта, выраженная числом от 0 до 1."
+                )
+            },
+            {
+                "role": "user",
+                "content": json.dumps(embedding, ensure_ascii=False)
+            }
+        ],
+    )
+    profile_description = desc_resp.choices[0].message.content.strip()
+
+    # 3️⃣ write it back
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE user_embeddings SET profile_description = $2 WHERE user_id = $1",
+            user_id, profile_description
+        )
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
@@ -842,17 +887,19 @@ async def cmd_theirprofile(message: Message):
 
 
 @dp.message(Command("recommend"))
-async def cmd_recommend(message: Message):
-    user_id = message.from_user.id
-
-    # Fetch top-3 similar users
-    recs = await find_similar_users(user_id, top_n=3)
+async def cmd_recommend(message: Message, state: FSMContext):
+    # parse optional interests from the user’s command, e.g. `/search programming films`
+    parts = message.text.split()[1:]
+    recs  = await find_similar_users(
+        user_id=message.from_user.id,
+        top_n=5,
+        min_sim=0.8,
+        interests=parts or None
+    )
     if not recs:
-        return await message.answer("❌ Не удалось найти похожих пользователей.")
-
-    # Send each recommendation
-    for other_id, sim, row in recs:
-        profile_text = format_profile(row)
+        return await message.answer("Никого не нашёл ≥ 80% (с такими интересами).")
+    for uid, sim in recs:
+        await message.answer(f"👤 {uid} — сходство {sim*100:.1f}%")
 
         # Build a 42-line string for the full embedding
         vec = row_to_vector(row)
@@ -1033,10 +1080,24 @@ async def relay_message(message: Message):
     if not partner_id:
         await message.answer("❗ У вас нет активного собеседника. Напишите /search чтобы найти кого-то.")
         return
+        user_id    = message.from_user.id
 
+
+    await bot.copy_message(chat_id=partner_id, from_chat_id=message.chat.id, message_id=message.message_id)
+    # 2️⃣ log it
+    chat_id = f"{min(user_id, partner_id)}_{max(user_id, partner_id)}"
+    text    = message.text or message.caption or ""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO user_messages (chat_id, from_user, to_user, text)
+            VALUES ($1,$2,$3,$4)
+            """,
+            chat_id, user_id, partner_id, text
+        )
     # Регистрируем пользователя, если он ещё не в БД
     await register_user(pool, message.from_user)
-
+    
     # Пересылаем сообщение и увеличиваем счётчик
     await bot.copy_message(chat_id=partner_id, from_chat_id=message.chat.id, message_id=message.message_id)
     await increment_messages(pool, user_id)
@@ -1222,6 +1283,57 @@ async def ban_check_middleware(handler, event, data):
 
 
 
+async def fetch_last_window(chat_id: str, n: int = 25) -> str:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT text
+              FROM user_messages
+             WHERE chat_id = $1
+             ORDER BY ts DESC
+             LIMIT $2
+            """,
+            chat_id, n
+        )
+    # reverse to chronological order
+    return "\n".join(r["text"] for r in reversed(rows))
+
+
+async def analyze_dialogue_deltas(dialogue: str) -> dict:
+    prompt = (
+        "Ты — эксперт-психолог. По этому диалогу:\n\n"
+        f"{dialogue}\n\n"
+        "Верни JSON, где каждому ключу из:\n"
+        f"{', '.join(NUM_COLS)}\n"
+        "соответствует 0 или +0.1 или -0.1, без пояснений."
+    )
+    resp = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+          {"role":"system","content":"Анализ диалога для поправок эмбеддинга."},
+          {"role":"user",  "content":prompt},
+        ],
+    )
+    return _safe_json_loads(resp.choices[0].message.content)
+
+
+async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = True):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT embedding_vector FROM user_embeddings WHERE user_id=$1",
+            user_id
+        )
+        if not row: return
+        vec = np.array(row["embedding_vector"], dtype=float)
+        # apply GPT’s deltas
+        for i, trait in enumerate(NUM_COLS):
+            vec[i] += float(deltas.get(trait, 0))
+        if clamp:
+            vec = np.clip(vec, 0.0, 1.0)
+        await conn.execute(
+            "UPDATE user_embeddings SET embedding_vector=$2, chat_window=$3, updated_at=NOW() WHERE user_id=$1",
+            user_id, vec.tolist(), None  # we’ll set chat_window below
+        )
 
 @dp.message(Command("info"))
 async def info(message: Message):
@@ -1300,6 +1412,23 @@ async def start_search(message: Message, state: FSMContext):
 async def stop(message: Message):
     user_id = message.from_user.id
     partner_id = active_chats.pop(user_id, None)
+    # inside stop() or next_chat():
+    chat_id = f"{min(user_id, partner_id)}_{max(user_id, partner_id)}"
+    window  = await fetch_last_window(chat_id, 25)
+
+#     1️⃣ store the window
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE user_embeddings SET chat_window=$2 WHERE user_id=$1",
+            user_id, window
+        )
+        await conn.execute(
+            "UPDATE user_embeddings SET chat_window=$2 WHERE user_id=$1",
+            partner_id, window
+        )
+
+    
+
 
     if partner_id:
         active_chats.pop(partner_id, None)
@@ -1307,6 +1436,14 @@ async def stop(message: Message):
         # ⬆️ Увеличиваем full_chats у обоих
         await increment_full_chats(pool, user_id)
         await increment_full_chats(pool, partner_id)
+        # 2️⃣ ask GPT for deltas and apply
+        deltas = await analyze_dialogue_deltas(window)
+        await apply_deltas_to_embedding(user_id,    deltas)
+        await apply_deltas_to_embedding(partner_id, deltas)
+        # … your existing embed-adjustment calls …
+        await update_profile_description(user_id)
+        await update_profile_description(partner_id)
+
 
            # Выбираем случайную цитату
         import random
@@ -1379,7 +1516,31 @@ async def next_chat(message: Message, state: FSMContext):
     # Завершение текущего чата
     if user_id in active_chats:
         partner_id = active_chats[user_id]
-        
+        # inside stop() or next_chat():
+        chat_id = f"{min(user_id, partner_id)}_{max(user_id, partner_id)}"
+        window  = await fetch_last_window(chat_id, 25)
+
+        # 1️⃣ store the window
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE user_embeddings SET chat_window=$2 WHERE user_id=$1",
+                user_id, window
+            )
+            await conn.execute(
+                "UPDATE user_embeddings SET chat_window=$2 WHERE user_id=$1",
+                partner_id, window
+            )
+
+        # 2️⃣ ask GPT for deltas and apply
+        deltas = await analyze_dialogue_deltas(window)
+        await apply_deltas_to_embedding(user_id,    deltas)
+        await apply_deltas_to_embedding(partner_id, deltas)
+        deltas = await analyze_dialogue_deltas(window)
+        await apply_deltas_to_embedding(user_id,    deltas)
+        await apply_deltas_to_embedding(partner_id, deltas)
+        # … your existing embed-adjustment calls …
+        await update_profile_description(user_id)
+        await update_profile_description(partner_id)
         # Обновляем счетчики чатов
         try:
             async with pool.acquire() as conn:
