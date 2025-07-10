@@ -911,7 +911,7 @@ async def cmd_myprofile(message: Message):
     img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
 
 
-    uf = io.BytesIO(img_bytes)
+    buf = io.BytesIO(img_bytes)
     buf.name = "profile.png"
     await bot.send_photo(message.chat.id, photo=InputFile(buf))
 
@@ -932,7 +932,7 @@ async def cmd_theirprofile(message: Message):
     traits  = list(PSYCHO_TRAITS.keys())
     values  = [profile[t] for t in traits]
     img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
-    uf = io.BytesIO(img_bytes)
+    buf = io.BytesIO(img_bytes)
     buf.name = "profile.png"
     await bot.send_photo(message.chat.id, photo=InputFile(buf))
 
