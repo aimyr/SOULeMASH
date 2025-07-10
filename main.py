@@ -17,6 +17,10 @@ from collections import deque
 import matplotlib.pyplot as plt
 import io
 import random 
+from aiogram.types import InputFile
+import io
+
+
 # ... остальной код ...
 
 from db import (
@@ -905,7 +909,11 @@ async def cmd_myprofile(message: Message):
     traits = list(PSYCHO_TRAITS.keys())
     values = [profile[t] for t in traits]
     img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
-    await bot.send_photo(message.chat.id, photo=img_bytes)
+
+
+    uf = io.BytesIO(img_bytes)
+    buf.name = "profile.png"
+    await bot.send_photo(message.chat.id, photo=InputFile(buf))
 
 
 @dp.message(Command("theirprofile"))
@@ -924,13 +932,15 @@ async def cmd_theirprofile(message: Message):
     traits  = list(PSYCHO_TRAITS.keys())
     values  = [profile[t] for t in traits]
     img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
-    await bot.send_photo(message.chat.id, photo=img_bytes)
+    uf = io.BytesIO(img_bytes)
+    buf.name = "profile.png"
+    await bot.send_photo(message.chat.id, photo=InputFile(buf))
+
 
 
 
 @dp.message(Command("recommend"))
 async def cmd_recommend(message: Message, state: FSMContext):
-    # parse optional interests from the user’s command, e.g. `/search programming films`
     parts = message.text.split()[1:]
     recs  = await find_similar_users(
         user_id=message.from_user.id,
@@ -940,19 +950,35 @@ async def cmd_recommend(message: Message, state: FSMContext):
     )
     if not recs:
         return await message.answer("Никого не нашёл ≥ 80% (с такими интересами).")
-    for uid, sim in recs:
-        await message.answer(f"👤 {uid} — сходство {sim*100:.1f}%")
 
-        # Build a 42-line string for the full embedding
+    for uid, sim in recs:
+        # 1) Fetch full row and text profile
+        row          = await fetch_embedding_row(uid)
+        profile_text = format_profile(row)
+
+        # 2) Send the text block
+        await message.answer(
+            f"{profile_text}\n\n"
+            f"🔗 Сходство: {sim*100:.1f}%",
+            parse_mode=ParseMode.HTML
+        )
+
+        # 3) Generate radar chart bytes
+        profile = row_to_profile(row)
+        traits  = list(PSYCHO_TRAITS.keys())
+        values  = [profile[t] for t in traits]
+        img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
+
+        # 4) Wrap in InputFile and send
+        buf = io.BytesIO(img_bytes)
+        buf.name = "recommend.png"
+        await bot.send_photo(message.chat.id, photo=InputFile(buf))
+
+        # 5) (Optional) show full embedding if you want
         vec = row_to_vector(row)
         embed_lines = "\n".join(f"{i+1:02d}: {v:.4f}" for i, v in enumerate(vec))
-
         await message.answer(
-            f"👤 <b>Пользователь:</b> <code>{other_id}</code>\n"
-            f"🔗 <b>Сходство:</b> {sim*100:.1f}%\n\n"
-            f"{profile_text}\n\n"
-            f"<b>Полное embedding (42 dims):</b>\n"
-            f"<code>{embed_lines}</code>",
+            f"<b>Полное embedding (42 dims):</b>\n<code>{embed_lines}</code>",
             parse_mode=ParseMode.HTML
         )
 
