@@ -14,6 +14,8 @@ from config import BOT_TOKEN
 from asyncpg import Pool
 from datetime import datetime
 from collections import deque
+import matplotlib.pyplot as plt
+import io
 
 # ... остальной код ...
 
@@ -349,6 +351,28 @@ def format_profile(row) -> str:
     lines.append(" ".join(f"{x:.4f}" for x in vec[:10]) + " …")
 
     return "\n".join(lines)
+
+
+def generate_radar_chart(values: list[float], traits: list[str]) -> bytes:
+    # close the loop
+    vals = values + values[:1]
+    angles = np.linspace(0, 2 * np.pi, len(traits), endpoint=False).tolist()
+    angles += angles[:1]
+
+    fig, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(4,4))
+    ax.plot(angles, vals)
+    ax.fill(angles, vals, alpha=0.25)
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(traits)
+    ax.set_ylim(0,1)
+    ax.yaxis.grid(True)
+    ax.xaxis.grid(False)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight')
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
 
 
 async def update_profile_description(user_id: int):
@@ -872,18 +896,36 @@ async def cmd_myprofile(message: Message):
     row = await fetch_embedding_row(message.from_user.id)
     if not row:
         return await message.answer("❌ Ваш профиль ещё не готов или не найден.")
-    await message.answer(format_profile(row), parse_mode=ParseMode.HTML)
+
+    text = format_profile(row)
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
+    # generate and send chart
+    profile = row_to_profile(row)
+    traits = list(PSYCHO_TRAITS.keys())
+    values = [profile[t] for t in traits]
+    img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
+    await bot.send_photo(message.chat.id, photo=img_bytes)
+
 
 @dp.message(Command("theirprofile"))
 async def cmd_theirprofile(message: Message):
-    user_id = message.from_user.id
-    partner_id = active_chats.get(user_id)
-    if not partner_id:
+    partner = active_chats.get(message.from_user.id)
+    if not partner:
         return await message.answer("❌ У вас нет активного собеседника.")
-    row = await fetch_embedding_row(partner_id)
+    row = await fetch_embedding_row(partner)
     if not row:
         return await message.answer("❌ Профиль вашего собеседника не найден.")
-    await message.answer(format_profile(row), parse_mode=ParseMode.HTML)
+
+    text = format_profile(row)
+    await message.answer(text, parse_mode=ParseMode.HTML)
+
+    profile = row_to_profile(row)
+    traits  = list(PSYCHO_TRAITS.keys())
+    values  = [profile[t] for t in traits]
+    img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
+    await bot.send_photo(message.chat.id, photo=img_bytes)
+
 
 
 @dp.message(Command("recommend"))
