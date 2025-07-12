@@ -1494,7 +1494,7 @@ async def start_search(message: Message, state: FSMContext):
 
     
 
-@@dp.message(Command("stop"))
+@dp.message(Command("stop"))
 async def stop(message: Message):
     user_id    = message.from_user.id
     partner_id = active_chats.pop(user_id, None)
