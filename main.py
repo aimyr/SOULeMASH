@@ -268,7 +268,7 @@ PSYCHO_TRAITS = {
     "analytic": {"weight": 0.8},
     "emotional": {"weight": 1.0}
 }
-
+NUM_COLS = list(PSYCHO_TRAITS.keys())
 MATCH_TYPES = {
     "similar": ["extraversion", "openness", "agreeableness"],
     "complementary": ["neuroticism", "conscientiousness"],
@@ -1383,7 +1383,6 @@ async def fetch_last_window(chat_id: str, n: int = 25) -> str:
 
 
 async def analyze_dialogue_deltas(dialogue: str) -> dict:
-    NUM_COLS = list(PSYCHO_TRAITS.keys())
 
     prompt = (
         "Ты — эксперт-психолог. По этому диалогу:\n\n"
@@ -1411,7 +1410,7 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         if not row: return
         vec = np.array(row["embedding_vector"], dtype=float)
         # apply GPT’s deltas
-        NUM_COLS = list(PSYCHO_TRAITS.keys())
+        
     
         for i, trait in enumerate(NUM_COLS):
             vec[i] += float(deltas.get(trait, 0))
@@ -1495,64 +1494,57 @@ async def start_search(message: Message, state: FSMContext):
 
     
 
-@dp.message(Command("stop"))
+@@dp.message(Command("stop"))
 async def stop(message: Message):
-    user_id = message.from_user.id
+    user_id    = message.from_user.id
     partner_id = active_chats.pop(user_id, None)
-    # inside stop() or next_chat():
+
+    # 1️⃣ If there was no active chat, bail out immediately:
+    if not partner_id:
+        return await message.answer(
+            "❗ У вас нет активного диалога.",
+            reply_markup=main_menu
+        )
+
+    # 2️⃣ Remove the back‐pointer on the partner too:
+    active_chats.pop(partner_id, None)
+
+    # 3️⃣ Snapshot the last 25 messages of this chat:
     chat_id = f"{min(user_id, partner_id)}_{max(user_id, partner_id)}"
     window  = await fetch_last_window(chat_id, 25)
-
-#     1️⃣ store the window
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE user_embeddings SET chat_window=$2 WHERE user_id=$1",
+            "UPDATE user_embeddings SET chat_window = $2 WHERE user_id = $1",
             user_id, window
         )
         await conn.execute(
-            "UPDATE user_embeddings SET chat_window=$2 WHERE user_id=$1",
+            "UPDATE user_embeddings SET chat_window = $2 WHERE user_id = $1",
             partner_id, window
         )
 
-    
+    # 4️⃣ Ask GPT for the per-trait deltas and apply them:
+    deltas = await analyze_dialogue_deltas(window)
+    await apply_deltas_to_embedding(user_id,    deltas)
+    await apply_deltas_to_embedding(partner_id, deltas)
 
+    # 5️⃣ Regenerate the human-readable profile description:
+    await update_profile_description(user_id)
+    await update_profile_description(partner_id)
 
-    if partner_id:
-        active_chats.pop(partner_id, None)
+    # 6️⃣ Increment “completed chats” counter and notify both sides:
+    await increment_full_chats(pool, user_id)
+    await increment_full_chats(pool, partner_id)
 
-        # ⬆️ Увеличиваем full_chats у обоих
-        await increment_full_chats(pool, user_id)
-        await increment_full_chats(pool, partner_id)
-        # 2️⃣ ask GPT for deltas and apply
-        deltas = await analyze_dialogue_deltas(window)
-        await apply_deltas_to_embedding(user_id,    deltas)
-        await apply_deltas_to_embedding(partner_id, deltas)
-        # … your existing embed-adjustment calls …
-        await update_profile_description(user_id)
-        await update_profile_description(partner_id)
+    import random
+    quote = random.choice(QUOTES)
 
+    await bot.send_message(
+        partner_id,
+        f"👋 Собеседник завершил диалог\n\n{quote}\n\n/search — найти нового собеседника",
+        reply_markup=main_menu
+    )
+    await message.answer("Вы завершили диалог.", reply_markup=main_menu)
 
-           # Выбираем случайную цитату
-        import random
-        quote = random.choice(QUOTES)
-
-         # Формируем сообщение с цитатой
-        text_to_partner = f"👋 Собеседник завершил диалог\n\n{quote}\n\n/search — найти нового собеседника"
-
-        await bot.send_message(
-            partner_id, 
-            text_to_partner, 
-            reply_markup=main_menu
-        )
-        await message.answer(
-            "Вы завершили диалог.", 
-            reply_markup=main_menu
-        )
-    else:
-        await message.answer(
-            "❗ У вас нет активного диалога.", 
-            reply_markup=main_menu
-        )
 
 @dp.message(Command("next"))
 async def next_chat(message: Message, state: FSMContext):
