@@ -1519,6 +1519,7 @@ async def analyze_dialogue_deltas(dialogue: str) -> dict:
         return {trait: 0.0 for trait in NUM_COLS}
 
 
+
 async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = True):
     async with pool.acquire() as conn:
         # 1. Fetch the current vector
@@ -1529,40 +1530,54 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         if not row:
             return
 
-        # 2. Convert to numpy array - handle both list and string formats
+        # 2. Convert to numpy array - handle various formats
         vector_data = row["embedding_vector"]
+        vec = None
         
-        if isinstance(vector_data, str):
-            # Parse string representation like '[0.1,0.2,...]'
+        # Handle string/bytes representations like '[0.1,0.2,...]'
+        if isinstance(vector_data, (str, bytes)):
             try:
-                # Remove brackets and split
-                vector_str = vector_data.strip('[]')
-                vec_list = [float(x) for x in vector_str.split(',')]
-                vec = np.array(vec_list, dtype=float)
-            except:
-                vec = np.zeros(42, dtype=float)
-        else:
-            vec = np.array(vector_data, dtype=float)
+                # Decode bytes to string if needed
+                if isinstance(vector_data, bytes):
+                    vector_str = vector_data.decode('utf-8')
+                else:
+                    vector_str = vector_data
+                
+                # Clean and parse the string
+                cleaned = vector_str.strip().replace('[', '').replace(']', '')
+                if cleaned:
+                    vec = np.array([float(x.strip()) for x in cleaned.split(',')], dtype=float)
+                else:  # Empty array case
+                    vec = np.zeros(42, dtype=float)
+            except Exception as e:
+                logging.error(f"Vector parsing failed for user {user_id}: {e}")
+                vec = None
         
-        # 3. If vector is invalid, create 42-dim zero vector
-        if vec.ndim == 0 or len(vec) != 42:
+        # Handle list/tuple formats
+        if vec is None and isinstance(vector_data, (list, tuple)):
+            try:
+                vec = np.array(vector_data, dtype=float)
+            except:
+                vec = None
+        
+        # Fallback to zero vector if parsing fails
+        if vec is None or vec.ndim != 1 or len(vec) != 42:
+            logging.warning(f"Resetting invalid vector for user {user_id}")
             vec = np.zeros(42, dtype=float)
-            logging.warning(f"Reset invalid vector for user {user_id} to 42-dim zero vector")
 
-        # ... rest of the function remains the same ...
-        # 4. Apply deltas to all traits
+        # 3. Apply deltas to all traits
         for i, trait in enumerate(PSYCHO_TRAITS.keys()):
             if i < len(vec):  # Safety check
                 vec[i] += float(deltas.get(trait, 0))
 
-        # 5. Clamp values between 0 and 1
+        # 4. Clamp values between 0 and 1
         if clamp:
             vec = np.clip(vec, 0.0, 1.0)
 
-        # 6. Convert to PostgreSQL vector format
+        # 5. Convert to PostgreSQL vector format
         vec_pg = "[" + ",".join(str(x) for x in vec) + "]"
 
-        # 7. Update the database
+        # 6. Update the database
         await conn.execute(
             """
             UPDATE user_embeddings
@@ -1575,7 +1590,6 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
             vec_pg,
             None
         )
-
 
 
 @dp.message(Command("info"))
