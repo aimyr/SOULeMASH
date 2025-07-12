@@ -230,13 +230,15 @@ class Matchmaker:
             return matches
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Compute cosine similarity between two vectors."""
+    """Compute cosine similarity between two vectors with zero norm handling."""
     norm_a = np.linalg.norm(a)
     norm_b = np.linalg.norm(b)
+    
     if norm_a == 0 or norm_b == 0:
         return 0.0
-    return float(np.dot(a, b) / (norm_a * norm_b))
-
+    
+    dot_product = np.dot(a, b)
+    return float(dot_product / (norm_a * norm_b))
 
 
 async def find_similar_users(
@@ -255,7 +257,7 @@ async def find_similar_users(
     sims = []
     for row in rows:
         vec = row_to_vector(row)
-        sim = float(np.dot(me_vec, vec) / (np.linalg.norm(me_vec)*np.linalg.norm(vec)))
+        sim = cosine_similarity(me_vec, vec)
         if sim < min_sim: continue
 
         # interest filtering: e.g. row['programming'] >= 0.5
@@ -354,11 +356,19 @@ def row_to_vector(row):
     """Convert database row to vector, ensuring 42 dimensions"""
     vector = row.get("embedding_vector")
     
-    if isinstance(vector, str):
-        # Convert from '[0.1,0.2,...]' to list of floats
-        try:
-            vec = [float(x) for x in vector.strip('[]').split(',')]
-        except:
+    if vector is None:
+        vec = []
+    elif isinstance(vector, str):
+        # Handle different string formats
+        if vector.startswith('[') and vector.endswith(']'):
+            try:
+                vec = json.loads(vector)
+            except:
+                try:
+                    vec = [float(x) for x in vector.strip('[]').split(',')]
+                except:
+                    vec = []
+        else:
             vec = []
     elif isinstance(vector, list):
         vec = vector
@@ -449,48 +459,53 @@ def generate_radar_chart(values: list[float], traits: list[str]) -> bytes:
 
 
 async def update_profile_description(user_id: int):
-    """
-    Fetch the just-updated embedding_vector for user_id,
-    ask ChatGPT to generate a one-paragraph profile based on it,
-    and write that back into profile_description.
-    """
-    # 1️⃣ load the new embedding
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT embedding_vector FROM user_embeddings WHERE user_id = $1",
-            user_id
+    try:
+        # 1️⃣ load the new embedding
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT embedding_vector FROM user_embeddings WHERE user_id = $1",
+                user_id
+            )
+        if not row:
+            return
+
+        embedding = row["embedding_vector"]
+        
+        # If it's a string, convert to list
+        if isinstance(embedding, str):
+            try:
+                embedding = json.loads(embedding)
+            except:
+                return
+
+        # 2️⃣ ask GPT for a natural-language description
+        desc_resp = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты — эксперт-психолог. Сформулируй одним абзацем на русском языке "
+                        "краткое описание пользователя на основе этого embedding-вектора. "
+                        "Каждая координата — это психологическая черта, выраженная числом от 0 до 1."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(embedding, ensure_ascii=False)
+                }
+            ],
         )
-    if not row:
-        return
+        profile_description = desc_resp.choices[0].message.content.strip()
 
-    embedding = row["embedding_vector"]
-
-    # 2️⃣ ask GPT for a natural-language description
-    desc_resp = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Ты — эксперт-психолог. Сформулируй одним абзацем на русском языке "
-                    "краткое описание пользователя на основе этого embedding-вектора. "
-                    "Каждая координата — это психологическая черта, выраженная числом от 0 до 1."
-                )
-            },
-            {
-                "role": "user",
-                "content": json.dumps(embedding, ensure_ascii=False)
-            }
-        ],
-    )
-    profile_description = desc_resp.choices[0].message.content.strip()
-
-    # 3️⃣ write it back
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE user_embeddings SET profile_description = $2 WHERE user_id = $1",
-            user_id, profile_description
-        )
+        # 3️⃣ write it back
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE user_embeddings SET profile_description = $2 WHERE user_id = $1",
+                user_id, profile_description
+            )
+    except Exception as e:
+        logging.error(f"Error updating profile description for user {user_id}: {e}")
 
 main_menu = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="/search")], [KeyboardButton(text="/info")]],
@@ -1092,8 +1107,11 @@ async def cmd_recommend(message: Message, state: FSMContext):
 async def cmd_connect(message: Message):
     parts = message.text.split()
     if len(parts) != 2 or not parts[1].isdigit():
-        return await message.answer("Использование: /connect <user_id>")
-
+        return await message.answer(
+            "Использование: <code>/connect &lt;user_id&gt;</code>\n\n"
+            "Пример: <code>/connect 123456789</code>",
+            parse_mode=ParseMode.HTML
+        )
     target_id = int(parts[1])
     me        = message.from_user.id
 
@@ -1485,12 +1503,20 @@ async def analyze_dialogue_deltas(dialogue: str) -> dict:
     raw = resp.choices[0].message.content.strip()
 
     try:
-        return _safe_json_loads(raw)
-    except Exception as e:
-        # Log the failure to parse so you can inspect later
-        logging.error(f"Failed to parse deltas JSON:\n{raw}\nError: {e}")
-        # Fall back to no changes
-        return { trait: 0.0 for trait in NUM_COLS }
+        # Try to parse as JSON
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            # Try to extract JSON from code block
+            pattern = r'```json\s*({.*?})\s*```'
+            match = re.search(pattern, raw, re.DOTALL)
+            if match:
+                return json.loads(match.group(1))
+        except:
+            pass
+        
+        logging.error(f"Failed to parse deltas JSON:\n{raw}")
+        return {trait: 0.0 for trait in NUM_COLS}
 
 
 async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = True):
@@ -1503,14 +1529,27 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         if not row:
             return
 
-        # 2. Convert to numpy array
-        vec = np.array(row["embedding_vector"], dtype=float)
+        # 2. Convert to numpy array - handle both list and string formats
+        vector_data = row["embedding_vector"]
+        
+        if isinstance(vector_data, str):
+            # Parse string representation like '[0.1,0.2,...]'
+            try:
+                # Remove brackets and split
+                vector_str = vector_data.strip('[]')
+                vec_list = [float(x) for x in vector_str.split(',')]
+                vec = np.array(vec_list, dtype=float)
+            except:
+                vec = np.zeros(42, dtype=float)
+        else:
+            vec = np.array(vector_data, dtype=float)
         
         # 3. If vector is invalid, create 42-dim zero vector
         if vec.ndim == 0 or len(vec) != 42:
             vec = np.zeros(42, dtype=float)
             logging.warning(f"Reset invalid vector for user {user_id} to 42-dim zero vector")
 
+        # ... rest of the function remains the same ...
         # 4. Apply deltas to all traits
         for i, trait in enumerate(PSYCHO_TRAITS.keys()):
             if i < len(vec):  # Safety check
