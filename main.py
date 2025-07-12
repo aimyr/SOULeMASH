@@ -19,6 +19,9 @@ import io
 import random 
 from aiogram.types import InputFile
 import io
+from aiogram.types import BufferedInputFile
+import io
+
 
 
 # ... остальной код ...
