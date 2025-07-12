@@ -897,44 +897,57 @@ async def stop_search(message: Message):
 # see profile
 @dp.message(Command("myprofile"))
 async def cmd_myprofile(message: Message):
+    # 1️⃣ Fetch the user’s embedding row
     row = await fetch_embedding_row(message.from_user.id)
     if not row:
         return await message.answer("❌ Ваш профиль ещё не готов или не найден.")
 
+    # 2️⃣ Send the textual profile
     text = format_profile(row)
     await message.answer(text, parse_mode=ParseMode.HTML)
 
-    # generate and send chart
-    profile = row_to_profile(row)
-    traits = list(PSYCHO_TRAITS.keys())
-    values = [profile[t] for t in traits]
-    img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
-
-
-    buf = io.BytesIO(img_bytes)
-    buf.name = "profile.png"
-    await bot.send_photo(message.chat.id, photo=InputFile(buf))
-
-
-@dp.message(Command("theirprofile"))
-async def cmd_theirprofile(message: Message):
-    partner = active_chats.get(message.from_user.id)
-    if not partner:
-        return await message.answer("❌ У вас нет активного собеседника.")
-    row = await fetch_embedding_row(partner)
-    if not row:
-        return await message.answer("❌ Профиль вашего собеседника не найден.")
-
-    text = format_profile(row)
-    await message.answer(text, parse_mode=ParseMode.HTML)
-
+    # 3️⃣ Build the radar chart
     profile = row_to_profile(row)
     traits  = list(PSYCHO_TRAITS.keys())
     values  = [profile[t] for t in traits]
     img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
-    buf = io.BytesIO(img_bytes)
-    buf.name = "profile.png"
-    await bot.send_photo(message.chat.id, photo=InputFile(buf))
+
+    # 4️⃣ Wrap bytes in a BufferedInputFile and send as photo
+    bio = io.BytesIO()
+    bio.write(img_bytes)
+    bio.seek(0)
+    file = BufferedInputFile(file=bio.read(), filename="profile.png")
+    await bot.send_photo(chat_id=message.chat.id, photo=file)
+
+# … rest of 
+@dp.message(Command("theirprofile"))
+async def cmd_theirprofile(message: Message):
+    # 1️⃣ Get the partner’s user_id
+    partner_id = active_chats.get(message.from_user.id)
+    if not partner_id:
+        return await message.answer("❌ У вас нет активного собеседника.")
+    
+    # 2️⃣ Fetch their embedding row
+    row = await fetch_embedding_row(partner_id)
+    if not row:
+        return await message.answer("❌ Профиль вашего собеседника не найден.")
+    
+    # 3️⃣ Send the textual profile
+    text = format_profile(row)
+    await message.answer(text, parse_mode=ParseMode.HTML)
+    
+    # 4️⃣ Build the radar chart
+    profile = row_to_profile(row)
+    traits  = list(PSYCHO_TRAITS.keys())
+    values  = [profile[t] for t in traits]
+    img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
+    
+    # 5️⃣ Wrap in BufferedInputFile and send
+    bio = io.BytesIO()
+    bio.write(img_bytes)
+    bio.seek(0)
+    file = BufferedInputFile(file=bio.read(), filename="their_profile.png")
+    await bot.send_photo(chat_id=message.chat.id, photo=file)
 
 
 
@@ -942,7 +955,7 @@ async def cmd_theirprofile(message: Message):
 @dp.message(Command("recommend"))
 async def cmd_recommend(message: Message, state: FSMContext):
     parts = message.text.split()[1:]
-    recs  = await find_similar_users(
+    recs = await find_similar_users(
         user_id=message.from_user.id,
         top_n=5,
         min_sim=0.8,
@@ -952,29 +965,30 @@ async def cmd_recommend(message: Message, state: FSMContext):
         return await message.answer("Никого не нашёл ≥ 80% (с такими интересами).")
 
     for uid, sim in recs:
-        # 1) Fetch full row and text profile
-        row          = await fetch_embedding_row(uid)
+        row = await fetch_embedding_row(uid)
         profile_text = format_profile(row)
 
-        # 2) Send the text block
+        # 1) send the text
         await message.answer(
             f"{profile_text}\n\n"
-            f"🔗 Сходство: {sim*100:.1f}%",
+            f"🔗 <b>Сходство:</b> {sim*100:.1f}%",
             parse_mode=ParseMode.HTML
         )
 
-        # 3) Generate radar chart bytes
+        # 2) generate radar chart bytes
         profile = row_to_profile(row)
-        traits  = list(PSYCHO_TRAITS.keys())
-        values  = [profile[t] for t in traits]
+        traits = list(PSYCHO_TRAITS.keys())
+        values = [profile[t] for t in traits]
         img_bytes = generate_radar_chart(values, [t.capitalize() for t in traits])
 
-        # 4) Wrap in InputFile and send
-        buf = io.BytesIO(img_bytes)
-        buf.name = "recommend.png"
-        await bot.send_photo(message.chat.id, photo=InputFile(buf))
+        # 3) wrap & send via BufferedInputFile
+        bio = io.BytesIO()
+        bio.write(img_bytes)
+        bio.seek(0)
+        input_file = BufferedInputFile(file=bio.read(), filename="recommend.png")
+        await bot.send_photo(chat_id=message.chat.id, photo=input_file)
 
-        # 5) (Optional) show full embedding if you want
+        # 4) optionally full embedding text
         vec = row_to_vector(row)
         embed_lines = "\n".join(f"{i+1:02d}: {v:.4f}" for i, v in enumerate(vec))
         await message.answer(
@@ -982,13 +996,11 @@ async def cmd_recommend(message: Message, state: FSMContext):
             parse_mode=ParseMode.HTML
         )
 
-    # Prompt for manual connect
     await message.answer(
         "Если хотите начать диалог с кем-то из этих пользователей, наберите:\n\n"
         "<code>/connect &lt;user_id&gt;</code>",
         parse_mode=ParseMode.HTML
     )
-
 
 # ─── 3. /connect Command ─────────────────────────────────────────────────────
 
