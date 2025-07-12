@@ -1470,7 +1470,7 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         await conn.execute(
             """
             UPDATE user_embeddings
-               SET embedding_vector = $2::jsonb,  # Cast to jsonb type
+               SET embedding_vector = $2::jsonb, 
                    chat_window = $3,
                    updated_at = NOW()
              WHERE user_id = $1
