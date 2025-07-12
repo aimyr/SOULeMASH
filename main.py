@@ -350,10 +350,20 @@ def row_to_profile(row):
 
 async def fetch_embedding_row(user_id: int):
     async with pool.acquire() as conn:
-        return await conn.fetchrow(
+        row = await conn.fetchrow(
             "SELECT * FROM user_embeddings WHERE user_id = $1",
             user_id
         )
+        # Convert vector to list if needed
+        if row and "embedding_vector" in row:
+            row = dict(row)
+            if isinstance(row["embedding_vector"], str):
+                # Convert from '[0.1,0.2,...]' to list of floats
+                row["embedding_vector"] = [
+                    float(x) for x in 
+                    row["embedding_vector"].strip('[]').split(',')
+                ]
+        return row
 
 def format_profile(row) -> str:
     profile = row_to_profile(row)
@@ -1449,10 +1459,9 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         if not row:
             return  # nothing to do
 
-        # 2️⃣ Convert to numpy array and guard against 0‑D arrays
+        # 2️⃣ Convert to numpy array
         vec = np.array(row["embedding_vector"], dtype=float)
         if vec.ndim == 0:
-            # fallback to zero vector if something went wrong
             vec = np.zeros(len(NUM_COLS), dtype=float)
 
         # 3️⃣ Apply GPT‑generated deltas
@@ -1463,20 +1472,20 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         if clamp:
             vec = np.clip(vec, 0.0, 1.0)
 
-        # 5️⃣ Convert to JSON string before writing back
-        vec_json = json.dumps(vec.tolist())
+        # 5️⃣ Convert to PostgreSQL vector format
+        vec_pg = "[" + ",".join(str(x) for x in vec) + "]"
 
-        # 6️⃣ Write it all back *before releasing the connection*
+        # 6️⃣ Update the database
         await conn.execute(
             """
             UPDATE user_embeddings
-               SET embedding_vector = $2::jsonb, 
-                   chat_window = $3,
-                   updated_at = NOW()
-             WHERE user_id = $1
+            SET embedding_vector = $2::vector,
+                chat_window = $3,
+                updated_at = NOW()
+            WHERE user_id = $1
             """,
             user_id,
-            vec_json,  # Now passing as JSON string
+            vec_pg,
             None
         )
 
