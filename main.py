@@ -1415,7 +1415,10 @@ async def fetch_last_window(chat_id: str, n: int = 25) -> str:
 
 
 async def analyze_dialogue_deltas(dialogue: str) -> dict:
-
+    """
+    Returns a dict of { trait: (-0.1|0|+0.1) } for each key in NUM_COLS.
+    Falls back to zero for all if parsing fails.
+    """
     prompt = (
         "Ты — эксперт-психолог. По этому диалогу:\n\n"
         f"{dialogue}\n\n"
@@ -1426,11 +1429,19 @@ async def analyze_dialogue_deltas(dialogue: str) -> dict:
     resp = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
-          {"role":"system","content":"Анализ диалога для поправок эмбеддинга."},
-          {"role":"user",  "content":prompt},
+            {"role": "system", "content": "Анализ диалога для поправок эмбеддинга."},
+            {"role": "user",   "content": prompt},
         ],
     )
-    return _safe_json_loads(resp.choices[0].message.content)
+    raw = resp.choices[0].message.content.strip()
+
+    try:
+        return _safe_json_loads(raw)
+    except Exception as e:
+        # Log the failure to parse so you can inspect later
+        logging.error(f"Failed to parse deltas JSON:\n{raw}\nError: {e}")
+        # Fall back to no changes
+        return { trait: 0.0 for trait in NUM_COLS }
 
 
 async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = True):
