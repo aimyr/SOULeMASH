@@ -28,6 +28,30 @@ OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-5XBRs-SSoSScHCXPeRij8JvO_KXHT2
 
 openai = OpenAI(api_key=OPENAI_API_KEY)
 
+import json
+import re
+
+def _safe_json_loads(raw: str):
+    """
+    Пытается извлечь JSON-объект из строки, даже если вокруг лишний текст
+    или ```json … ```-кодовая ограда.
+    """
+    raw = raw.strip()
+
+    # убираем ```json … ``` или ``` … ```
+    if raw.startswith("```"):
+        raw = re.sub(r"^```[a-zA-Z0-9]*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+
+    # пробуем напрямую
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # ищем первую/последнюю фигурные скобки
+        match = re.search(r"\{.*\}", raw, re.S)
+        if match:
+            return json.loads(match.group(0))
+        raise  # если ничего не помогает — пробрасываем ошибку
 
 
 
