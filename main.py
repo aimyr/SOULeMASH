@@ -1445,18 +1445,26 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
             "SELECT embedding_vector FROM user_embeddings WHERE user_id=$1",
             user_id
         )
-        vec = np.array(row["embedding_vector"], dtype=float)
-        # apply GPT’s deltas
-        
-    
-        for i, trait in enumerate(NUM_COLS):
-            vec[i] += float(deltas.get(trait, 0))
-        if clamp:
-            vec = np.clip(vec, 0.0, 1.0)
-        await conn.execute(
-            "UPDATE user_embeddings SET embedding_vector=$2, chat_window=$3, updated_at=NOW() WHERE user_id=$1",
-            user_id, vec.tolist(), None  # we’ll set chat_window below
-        )
+
+    # turn whatever you got into a NumPy array
+    vec = np.array(row["embedding_vector"], dtype=float)
+
+    # ▶️ If for some reason this is 0-D, replace with a proper zero vector:
+    if vec.ndim == 0:
+        vec = np.zeros(len(NUM_COLS), dtype=float)
+
+    # apply GPT’s deltas
+    for i, trait in enumerate(NUM_COLS):
+        vec[i] += float(deltas.get(trait, 0))
+    if clamp:
+        vec = np.clip(vec, 0.0, 1.0)
+
+    # write back
+    await conn.execute(
+        "UPDATE user_embeddings SET embedding_vector=$2, chat_window=$3, updated_at=NOW() WHERE user_id=$1",
+        user_id, vec.tolist(), None
+    )
+
 
 @dp.message(Command("info"))
 async def info(message: Message):
