@@ -1463,17 +1463,20 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         if clamp:
             vec = np.clip(vec, 0.0, 1.0)
 
-        # 5️⃣ Write it all back *before releasing the connection*
+        # 5️⃣ Convert to JSON string before writing back
+        vec_json = json.dumps(vec.tolist())
+
+        # 6️⃣ Write it all back *before releasing the connection*
         await conn.execute(
             """
             UPDATE user_embeddings
-               SET embedding_vector = $2,
-                   chat_window       = $3,
-                   updated_at        = NOW()
-             WHERE user_id         = $1
+               SET embedding_vector = $2::jsonb,  # Cast to jsonb type
+                   chat_window = $3,
+                   updated_at = NOW()
+             WHERE user_id = $1
             """,
             user_id,
-            vec.tolist(),
+            vec_json,  # Now passing as JSON string
             None
         )
 
