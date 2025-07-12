@@ -1441,29 +1441,42 @@ async def analyze_dialogue_deltas(dialogue: str) -> dict:
 
 async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = True):
     async with pool.acquire() as conn:
+        # 1️⃣ Fetch the current vector
         row = await conn.fetchrow(
-            "SELECT embedding_vector FROM user_embeddings WHERE user_id=$1",
+            "SELECT embedding_vector FROM user_embeddings WHERE user_id = $1",
             user_id
         )
+        if not row:
+            return  # nothing to do
 
-    # turn whatever you got into a NumPy array
-    vec = np.array(row["embedding_vector"], dtype=float)
+        # 2️⃣ Convert to numpy array and guard against 0‑D arrays
+        vec = np.array(row["embedding_vector"], dtype=float)
+        if vec.ndim == 0:
+            # fallback to zero vector if something went wrong
+            vec = np.zeros(len(NUM_COLS), dtype=float)
 
-    # ▶️ If for some reason this is 0-D, replace with a proper zero vector:
-    if vec.ndim == 0:
-        vec = np.zeros(len(NUM_COLS), dtype=float)
+        # 3️⃣ Apply GPT‑generated deltas
+        for i, trait in enumerate(NUM_COLS):
+            vec[i] += float(deltas.get(trait, 0))
 
-    # apply GPT’s deltas
-    for i, trait in enumerate(NUM_COLS):
-        vec[i] += float(deltas.get(trait, 0))
-    if clamp:
-        vec = np.clip(vec, 0.0, 1.0)
+        # 4️⃣ Clamp between 0 and 1
+        if clamp:
+            vec = np.clip(vec, 0.0, 1.0)
 
-    # write back
-    await conn.execute(
-        "UPDATE user_embeddings SET embedding_vector=$2, chat_window=$3, updated_at=NOW() WHERE user_id=$1",
-        user_id, vec.tolist(), None
-    )
+        # 5️⃣ Write it all back *before releasing the connection*
+        await conn.execute(
+            """
+            UPDATE user_embeddings
+               SET embedding_vector = $2,
+                   chat_window       = $3,
+                   updated_at        = NOW()
+             WHERE user_id         = $1
+            """,
+            user_id,
+            vec.tolist(),
+            None
+        )
+
 
 
 @dp.message(Command("info"))
