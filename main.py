@@ -1383,6 +1383,8 @@ async def fetch_last_window(chat_id: str, n: int = 25) -> str:
 
 
 async def analyze_dialogue_deltas(dialogue: str) -> dict:
+    NUM_COLS = list(PSYCHO_TRAITS.keys())
+
     prompt = (
         "Ты — эксперт-психолог. По этому диалогу:\n\n"
         f"{dialogue}\n\n"
@@ -1409,6 +1411,8 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         if not row: return
         vec = np.array(row["embedding_vector"], dtype=float)
         # apply GPT’s deltas
+        NUM_COLS = list(PSYCHO_TRAITS.keys())
+    
         for i, trait in enumerate(NUM_COLS):
             vec[i] += float(deltas.get(trait, 0))
         if clamp:
