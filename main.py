@@ -21,6 +21,14 @@ from aiogram.types import InputFile
 import io
 from aiogram.types import BufferedInputFile
 import io
+import os
+from openai import OpenAI
+# === OpenAI client setup ===
+OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-5XBRs-SSoSScHCXPeRij8JvO_KXHT2mc_Y6n0e7M7qT3BlbkFJvyiweBPGWuzj_fLKGCPw8eKnVN2Scd5gUW7NLaEycA")
+
+openai = OpenAI(api_key=OPENAI_API_KEY)
+
+
 
 
 
