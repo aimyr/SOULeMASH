@@ -18,11 +18,10 @@ import matplotlib.pyplot as plt
 import io
 import random 
 from aiogram.types import InputFile
-import io
 from aiogram.types import BufferedInputFile
-import io
 import os
 from openai import OpenAI
+from aiogram.exceptions import TelegramForbiddenError
 # === OpenAI client setup ===
 OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-5XBRs-SSoSScHCXPeRij8JvO_KXHT2mc_Y6n0e7M7qT3BlbkFJvyiweBPGWuzj_fLKGCPw8eKnVN2Scd5gUW7NLaEycA")
 
@@ -1253,7 +1252,7 @@ async def handle_report_content(message: Message):
 async def relay_message(message: Message):
     user_id = message.from_user.id
     
-    # Если пользователь в процессе репорта - пропускаем обычную обработку
+    # If user is in report process
     if user_id in active_reports:
         return
     
@@ -1262,29 +1261,42 @@ async def relay_message(message: Message):
     if not partner_id:
         await message.answer("❗ У вас нет активного собеседника. Напишите /search чтобы найти кого-то.")
         return
-        user_id    = message.from_user.id
 
-
-    await bot.copy_message(chat_id=partner_id, from_chat_id=message.chat.id, message_id=message.message_id)
-    # 2️⃣ log it
-    chat_id = f"{min(user_id, partner_id)}_{max(user_id, partner_id)}"
-    text    = message.text or message.caption or ""
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO user_messages (chat_id, from_user, to_user, text)
-            VALUES ($1,$2,$3,$4)
-            """,
-            chat_id, user_id, partner_id, text
+    try:
+        # Try to send message
+        await bot.copy_message(
+            chat_id=partner_id, 
+            from_chat_id=message.chat.id, 
+            message_id=message.message_id
         )
-    # Регистрируем пользователя, если он ещё не в БД
-    await register_user(pool, message.from_user)
-    
-    # Пересылаем сообщение и увеличиваем счётчик
-    await bot.copy_message(chat_id=partner_id, from_chat_id=message.chat.id, message_id=message.message_id)
-    await increment_messages(pool, user_id)
-
-
+        
+        # Log successful message
+        chat_id = f"{min(user_id, partner_id)}_{max(user_id, partner_id)}"
+        text = message.text or message.caption or ""
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO user_messages (chat_id, from_user, to_user, text)
+                VALUES ($1,$2,$3,$4)
+                """,
+                chat_id, user_id, partner_id, text
+            )
+        
+        # Register user and increment count
+        await register_user(pool, message.from_user)
+        await increment_messages(pool, user_id)
+        
+    except TelegramForbiddenError:
+        # Handle blocked user
+        logging.warning(f"User {partner_id} blocked the bot")
+        active_chats.pop(user_id, None)
+        active_chats.pop(partner_id, None)
+        
+        await message.answer(
+            "❌ Ваш собеседник заблокировал бота. Диалог завершён.\n"
+            "Используйте /search чтобы найти нового собеседника.",
+            reply_markup=main_menu
+        )
 # --- Уведомление админов ---
 async def notify_admins(reporter_id: int, reported_user_id: int, reason: str, screenshot_file_id: str = None):
     text = (
@@ -1534,31 +1546,32 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         vector_data = row["embedding_vector"]
         vec = None
         
-        # Handle string/bytes representations like '[0.1,0.2,...]'
-        if isinstance(vector_data, (str, bytes)):
+        # Handle string representations
+        if isinstance(vector_data, str):
             try:
-                # Decode bytes to string if needed
-                if isinstance(vector_data, bytes):
-                    vector_str = vector_data.decode('utf-8')
-                else:
-                    vector_str = vector_data
-                
                 # Clean and parse the string
-                cleaned = vector_str.strip().replace('[', '').replace(']', '')
-                if cleaned:
-                    vec = np.array([float(x.strip()) for x in cleaned.split(',')], dtype=float)
-                else:  # Empty array case
+                cleaned = vector_data.strip('[]')
+                parts = cleaned.split(',')
+                # Handle empty array case
+                if cleaned == "":
                     vec = np.zeros(42, dtype=float)
+                else:
+                    vec = np.array([float(x.strip()) for x in parts], dtype=float)
             except Exception as e:
-                logging.error(f"Vector parsing failed for user {user_id}: {e}")
+                logging.error(f"String vector parsing failed for user {user_id}: {e}")
                 vec = None
         
         # Handle list/tuple formats
-        if vec is None and isinstance(vector_data, (list, tuple)):
+        elif isinstance(vector_data, (list, tuple)):
             try:
                 vec = np.array(vector_data, dtype=float)
-            except:
+            except Exception as e:
+                logging.error(f"List vector conversion failed for user {user_id}: {e}")
                 vec = None
+                
+        # Handle numpy arrays
+        elif isinstance(vector_data, np.ndarray):
+            vec = vector_data.astype(float)
         
         # Fallback to zero vector if parsing fails
         if vec is None or vec.ndim != 1 or len(vec) != 42:
@@ -1581,16 +1594,13 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
         await conn.execute(
             """
             UPDATE user_embeddings
-            SET embedding_vector = $2::vector,
-                chat_window = $3,
+            SET embedding_vector = $2,
                 updated_at = NOW()
             WHERE user_id = $1
             """,
             user_id,
-            vec_pg,
-            None
+            vec_pg
         )
-
 
 @dp.message(Command("info"))
 async def info(message: Message):
@@ -1709,12 +1719,24 @@ async def stop(message: Message):
     import random
     quote = random.choice(QUOTES)
 
-    await bot.send_message(
-        partner_id,
-        f"👋 Собеседник завершил диалог\n\n{quote}\n\n/search — найти нового собеседника",
-        reply_markup=main_menu
-    )
+    try:
+        await bot.send_message(
+            partner_id,
+            f"👋 Собеседник завершил диалог\n\n{quote}\n\n/search — найти нового собеседника",
+            reply_markup=main_menu
+        )
+    except TelegramForbiddenError:
+        logging.warning(f"User {partner_id} blocked the bot - could not send stop notification")
     await message.answer("Вы завершили диалог.", reply_markup=main_menu)
+
+@dp.errors()
+async def errors_handler(update: types.Update, exception: Exception):
+    if isinstance(exception, TelegramForbiddenError):
+        logging.warning(f"TelegramForbiddenError: {exception}")
+        return True  # Suppress error
+    
+    logging.error(f"Unhandled exception: {exception}")
+    return True
 
 
 @dp.message(Command("next"))
