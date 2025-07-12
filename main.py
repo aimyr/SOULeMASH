@@ -1810,7 +1810,7 @@ async def me(message: Message):
         )
     else:
         await message.answer("Пользователь не найден в базе данных.")
-
+'''
 @dp.message(F.content_type.in_({"text", "sticker", "photo", "animation", "voice", "audio", "video", "document"}))
 async def relay_message(message: Message):
     user_id = message.from_user.id
@@ -1826,7 +1826,7 @@ async def relay_message(message: Message):
     # 🔁 Пересылаем сообщение и увеличиваем счётчик
     await bot.copy_message(chat_id=partner_id, from_chat_id=message.chat.id, message_id=message.message_id)
     await increment_messages(pool, user_id)
-
+'''
 
 async def setup_bot_commands():
     await bot.set_my_commands([
