@@ -423,7 +423,7 @@ async def update_profile_description(user_id: int):
     # 1️⃣ load the new embedding
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT embedding_vector FROM user_embeddings WHERE user_id = $1",
+            "SELECT vector FROM user_embeddings WHERE user_id = $1",
             user_id
         )
     if not row:
