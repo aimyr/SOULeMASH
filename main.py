@@ -31,29 +31,24 @@ openai = OpenAI(api_key=OPENAI_API_KEY)
 import json
 import re
 
-def _safe_json_loads(raw: str):
-    """
-    Пытается извлечь JSON-объект из строки, даже если вокруг лишний текст
-    или ```json … ```-кодовая ограда.
-    """
-    raw = raw.strip()
 
-    # убираем ```json … ``` или ``` … ```
+def _safe_json_loads(raw: str):
+    raw = raw.strip()
+    # remove ``` fences
     if raw.startswith("```"):
         raw = re.sub(r"^```[a-zA-Z0-9]*\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
-
-    # пробуем напрямую
+    # normalize +0.1 → 0.1
+    raw = re.sub(r'([:\s])\+([0-9]+(?:\.[0-9]+)?)', r'\1\2', raw)
+    # try direct parse
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # ищем первую/последнюю фигурные скобки
-        match = re.search(r"\{.*\}", raw, re.S)
-        if match:
-            return json.loads(match.group(0))
-        raise  # если ничего не помогает — пробрасываем ошибку
-
-
+        # fallback: grab first { … }
+        m = re.search(r"\{.*\}", raw, re.S)
+        if m:
+            return json.loads(m.group(0))
+        raise
 
 
 # ... остальной код ...
@@ -423,7 +418,7 @@ async def update_profile_description(user_id: int):
     # 1️⃣ load the new embedding
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT vector FROM user_embeddings WHERE user_id = $1",
+            "SELECT embedding_vector FROM user_embeddings WHERE user_id = $1",
             user_id
         )
     if not row:
@@ -1450,7 +1445,6 @@ async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = Tr
             "SELECT embedding_vector FROM user_embeddings WHERE user_id=$1",
             user_id
         )
-        if not row: return
         vec = np.array(row["embedding_vector"], dtype=float)
         # apply GPT’s deltas
         
