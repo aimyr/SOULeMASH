@@ -286,14 +286,36 @@ SUPPORT_USERNAME = "@soulemesh_channel"
 
 # --- Константы психологических черт ---
 PSYCHO_TRAITS = {
-    "extraversion": {"weight": 1.5, "opposite": "introversion"},
-    "neuroticism": {"weight": 1.3, "opposite": "stability"},
+    "extraversion": {"weight": 1.5},
+    "agreeableness": {"weight": 1.3},
     "openness": {"weight": 1.2},
-    "agreeableness": {"weight": 1.1},
     "conscientiousness": {"weight": 1.4},
-    "romantic": {"weight": 0.9},
-    "analytic": {"weight": 0.8},
-    "emotional": {"weight": 1.0}
+    "neuroticism": {"weight": 1.1},
+    "empathy": {"weight": 1.0},
+    "aggression_toxicity": {"weight": 0.9},
+    "dominance": {"weight": 0.8},
+    "warmth_affiliation": {"weight": 0.9},
+    "universalism": {"weight": 0.8},
+    "self_direction": {"weight": 0.9},
+    "stimulation": {"weight": 0.8},
+    "achievement": {"weight": 0.9},
+    "power": {"weight": 0.8},
+    "hedonism": {"weight": 0.9},
+    "benevolence": {"weight": 0.8},
+    "tradition": {"weight": 0.9},
+    "conformity": {"weight": 0.8},
+    "security": {"weight": 0.9},
+    "movies": {"weight": 0.7},
+    "music": {"weight": 0.7},
+    "books": {"weight": 0.7},
+    "travel": {"weight": 0.7},
+    "business": {"weight": 0.7},
+    "psychology": {"weight": 0.7},
+    "technology": {"weight": 0.7},
+    "sports": {"weight": 0.7},
+    "fashion": {"weight": 0.7},
+    "mindfulness": {"weight": 0.7},
+    # Add any additional traits to reach 42 dimensions
 }
 NUM_COLS = list(PSYCHO_TRAITS.keys())
 MATCH_TYPES = {
@@ -329,11 +351,28 @@ def is_number(value):
         return False
 
 def row_to_vector(row):
-    """Преобразование строки БД в вектор эмбеддингов"""
-    return np.array([
-        float(value) for key, value in row.items()
-        if key not in EXCLUDED_KEYS and is_number(value)
-    ])
+    """Convert database row to vector, ensuring 42 dimensions"""
+    vector = row.get("embedding_vector")
+    
+    if isinstance(vector, str):
+        # Convert from '[0.1,0.2,...]' to list of floats
+        try:
+            vec = [float(x) for x in vector.strip('[]').split(',')]
+        except:
+            vec = []
+    elif isinstance(vector, list):
+        vec = vector
+    else:
+        vec = []
+    
+    # Ensure we have exactly 42 dimensions
+    if len(vec) < 42:
+        vec = vec + [0.0] * (42 - len(vec))
+    elif len(vec) > 42:
+        vec = vec[:42]
+    
+    return np.array(vec)
+
 
 def row_to_profile(row):
     """Преобразование строки БД в психологический профиль"""
@@ -1451,31 +1490,35 @@ async def analyze_dialogue_deltas(dialogue: str) -> dict:
 
 async def apply_deltas_to_embedding(user_id: int, deltas: dict, clamp: bool = True):
     async with pool.acquire() as conn:
-        # 1️⃣ Fetch the current vector
+        # 1. Fetch the current vector
         row = await conn.fetchrow(
             "SELECT embedding_vector FROM user_embeddings WHERE user_id = $1",
             user_id
         )
         if not row:
-            return  # nothing to do
+            return
 
-        # 2️⃣ Convert to numpy array
+        # 2. Convert to numpy array
         vec = np.array(row["embedding_vector"], dtype=float)
-        if vec.ndim == 0:
-            vec = np.zeros(len(NUM_COLS), dtype=float)
+        
+        # 3. If vector is invalid, create 42-dim zero vector
+        if vec.ndim == 0 or len(vec) != 42:
+            vec = np.zeros(42, dtype=float)
+            logging.warning(f"Reset invalid vector for user {user_id} to 42-dim zero vector")
 
-        # 3️⃣ Apply GPT‑generated deltas
-        for i, trait in enumerate(NUM_COLS):
-            vec[i] += float(deltas.get(trait, 0))
+        # 4. Apply deltas to all traits
+        for i, trait in enumerate(PSYCHO_TRAITS.keys()):
+            if i < len(vec):  # Safety check
+                vec[i] += float(deltas.get(trait, 0))
 
-        # 4️⃣ Clamp between 0 and 1
+        # 5. Clamp values between 0 and 1
         if clamp:
             vec = np.clip(vec, 0.0, 1.0)
 
-        # 5️⃣ Convert to PostgreSQL vector format
+        # 6. Convert to PostgreSQL vector format
         vec_pg = "[" + ",".join(str(x) for x in vec) + "]"
 
-        # 6️⃣ Update the database
+        # 7. Update the database
         await conn.execute(
             """
             UPDATE user_embeddings
