@@ -30,37 +30,41 @@ openai = OpenAI(api_key=OPENAI_API_KEY)
 import json
 import re
 
-
 def _safe_json_loads(raw: str):
     raw = raw.strip()
-    # remove ``` fences
+    # Remove code fences
     if raw.startswith("```"):
-        raw = re.sub(r"^```[a-zA-Z0-9]*\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
+        raw = re.sub(r"^```[a-zA-Z0-9]*\s*", "", raw, flags=re.IGNORECASE)
+        raw = re.sub(r"\s*```$", "", raw, flags=re.IGNORECASE)
     
-    # Fix invalid JSON syntax: remove '+' signs before numbers
-    raw = re.sub(r':\s*\+', ':', raw)
-    
-    # Handle trailing commas
-    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+    # Fix invalid JSON syntax
+    raw = re.sub(r'([{,])\s*([^":\s]+)\s*:', r'\1"\2":', raw)  # Fix unquoted keys
+    raw = re.sub(r':\s*\+(\d)', r': \1', raw)  # Remove + before numbers
+    raw = re.sub(r':\s*\+', ':', raw)  # Remove standalone +
+    raw = re.sub(r'([\}\]"])\s*,', r'\1', raw)  # Remove trailing commas
+    raw = re.sub(r',\s*([\}\]])', r'\1', raw)  # Remove commas before closing brackets
+    raw = re.sub(r"'\s*:\s*", '":', raw)  # Fix single quotes in keys
+    raw = re.sub(r":\s*'", ':"', raw)  # Fix single quotes in values
+    raw = re.sub(r"'\s*([\}\]])", r'"\1', raw)  # Fix trailing single quotes
     
     try:
         return json.loads(raw)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        logging.error(f"JSON parse error: {e}\nOriginal content: {raw}")
         try:
             # Try to fix single quotes
-            raw = raw.replace("'", '"')
-            return json.loads(raw)
-        except:
-            # fallback: grab first { … }
-            m = re.search(r"\{.*\}", raw, re.S)
-            if m:
-                try:
+            fixed_raw = raw.replace("'", '"')
+            return json.loads(fixed_raw)
+        except json.JSONDecodeError:
+            try:
+                # Try to extract JSON object
+                m = re.search(r"\{[\s\S]*\}", raw)
+                if m:
                     return json.loads(m.group(0))
-                except:
-                    pass
-            logging.error(f"Failed to parse JSON after cleaning: {raw}")
-            return {}
+            except:
+                pass
+        logging.error(f"Completely failed to parse JSON: {raw}")
+        return {}
 
 
 # ... остальной код ...
@@ -1527,20 +1531,35 @@ async def analyze_dialogue_deltas(dialogue: str) -> dict:
     )
     raw = resp.choices[0].message.content.strip()
 
+    # Use the safe JSON loader here
     try:
-        # Try to parse as JSON
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        try:
-            # Try to extract JSON from code block
-            pattern = r'```json\s*({.*?})\s*```'
-            match = re.search(pattern, raw, re.DOTALL)
-            if match:
-                return json.loads(match.group(1))
-        except:
-            pass
+        parsed = _safe_json_loads(raw)
         
-        logging.error(f"Failed to parse deltas JSON:\n{raw}")
+        # Validate and normalize the parsed data
+        result = {}
+        for trait in NUM_COLS:
+            value = parsed.get(trait, 0)
+            
+            # Ensure values are within expected range
+            if isinstance(value, (int, float)):
+                # Normalize to -0.1, 0, or 0.1
+                if value > 0.05:
+                    result[trait] = 0.1
+                elif value < -0.05:
+                    result[trait] = -0.1
+                else:
+                    result[trait] = 0
+            else:
+                # Handle non-numeric values
+                try:
+                    result[trait] = float(value)
+                except (TypeError, ValueError):
+                    result[trait] = 0
+        
+        return result
+        
+    except Exception as e:
+        logging.error(f"Failed to parse deltas JSON: {e}\n{raw}")
         return {trait: 0.0 for trait in NUM_COLS}
 
 
