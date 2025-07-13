@@ -37,17 +37,30 @@ def _safe_json_loads(raw: str):
     if raw.startswith("```"):
         raw = re.sub(r"^```[a-zA-Z0-9]*\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw)
-    # normalize +0.1 → 0.1
-    raw = re.sub(r'([:\s])\+([0-9]+(?:\.[0-9]+)?)', r'\1\2', raw)
-    # try direct parse
+    
+    # Fix invalid JSON syntax: remove '+' signs before numbers
+    raw = re.sub(r':\s*\+', ':', raw)
+    
+    # Handle trailing commas
+    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+    
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # fallback: grab first { … }
-        m = re.search(r"\{.*\}", raw, re.S)
-        if m:
-            return json.loads(m.group(0))
-        raise
+        try:
+            # Try to fix single quotes
+            raw = raw.replace("'", '"')
+            return json.loads(raw)
+        except:
+            # fallback: grab first { … }
+            m = re.search(r"\{.*\}", raw, re.S)
+            if m:
+                try:
+                    return json.loads(m.group(0))
+                except:
+                    pass
+            logging.error(f"Failed to parse JSON after cleaning: {raw}")
+            return {}
 
 
 # ... остальной код ...
