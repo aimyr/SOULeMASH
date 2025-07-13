@@ -1288,15 +1288,26 @@ async def relay_message(message: Message):
         )
         
         # Log successful message
+        # Save message with sender info
         chat_id = f"{min(user_id, partner_id)}_{max(user_id, partner_id)}"
         text = message.text or message.caption or ""
+    
+        # Add sender prefix
+        if user_id < partner_id:
+            prefix = "A: "
+        else:
+            prefix = "B: "
+    
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO user_messages (chat_id, from_user, to_user, text)
-                VALUES ($1,$2,$3,$4)
+                VALUES ($1, $2, $3, $4)
                 """,
-                chat_id, user_id, partner_id, text
+                chat_id, 
+                user_id, 
+                partner_id, 
+                prefix + text  # Store with sender prefix
             )
         
         # Register user and increment count
@@ -1498,17 +1509,37 @@ async def fetch_last_window(chat_id: str, n: int = 25) -> str:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT text
-              FROM user_messages
-             WHERE chat_id = $1
-             ORDER BY ts DESC
-             LIMIT $2
+            SELECT from_user, text
+            FROM user_messages
+            WHERE chat_id = $1
+            ORDER BY ts DESC
+            LIMIT $2
             """,
             chat_id, n
         )
-    # reverse to chronological order
-    return "\n".join(r["text"] for r in reversed(rows))
-
+    
+    # Reverse to chronological order and format with sender
+    messages = []
+    for row in reversed(rows):
+        user_id = row["from_user"]
+        text = row["text"]
+        
+        # Determine sender label (A or B)
+        parts = chat_id.split('_')
+        if len(parts) == 2:
+            userA, userB = map(int, parts)
+            if user_id == userA:
+                sender = "A"
+            elif user_id == userB:
+                sender = "B"
+            else:
+                sender = "?"
+        else:
+            sender = "?"
+        
+        messages.append(f"{sender}: {text}")
+    
+    return "\n".join(messages)
 
 async def analyze_dialogue_deltas(dialogue: str) -> dict:
     """
