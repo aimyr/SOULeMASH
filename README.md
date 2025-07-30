@@ -30,3 +30,21 @@ aiogram 3.x (Telegram Bot Framework)
 PostgreSQL + asyncpg (асинхронная база данных)
 
 планируется подключение OpenAI GPT / HuggingFace
+
+
+SOULeMESH is a next‑generation Telegram bot for dating and conversation among university students and high schoolers. The name is a play on words: the Kazakh “sөylemesh” (“don’t speak”) and the English “Soul Mesh.” The core idea is not to swipe based on appearance, but to connect through the soul.
+
+As the saying goes, “Teng teñimen – tezek qabimen,” though that’s not necessarily how it was understood in the past. Perhaps we can even reshape its meaning.
+
+🔮 Unlike typical bots, SOULeMESH:
+
+* Ensures anonymity and security
+* Matches users by interests and personality type
+* Tracks message counts and completed conversations
+* Will soon leverage AI to match on “vibe,” analyze chats, and offer recommendations
+
+The project is fully implemented in Python using:
+
+* **aiogram 3.x** (Telegram Bot Framework)
+* **PostgreSQL + asyncpg** (asynchronous database)
+* Planned integration with **OpenAI GPT** / **Hugging Face**
