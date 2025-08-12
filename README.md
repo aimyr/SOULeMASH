@@ -1,4 +1,4 @@
-#SOULeMESH#
+# *SOULeMESH*
 
 
 
@@ -23,7 +23,7 @@ PostgreSQL + asyncpg (асинхронная база данных)
 
 
 
-#SOULeMESH#
+# *SOULeMESH*
 
 
 
