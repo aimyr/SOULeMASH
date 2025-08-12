@@ -1,4 +1,8 @@
-<p5>SOULeMESH</p5>
+SOULeMESH
+
+
+
+
 SOULeMESH — это Telegram-бот нового поколения для знакомств и общения между старшеклассниками и студентами.
 Название — игра слов:
 казахское «сөйлемеш» — «не говори»
@@ -19,7 +23,11 @@ PostgreSQL + asyncpg (асинхронная база данных)
 
 
 
-<p5>SOULeMESH</p5>
+SOULeMESH
+
+
+
+
 SOULeMESH is a next-generation Telegram bot designed to help high school and university students connect and make friends.
 The name is a play on words:
 
