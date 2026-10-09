@@ -1,48 +1,32 @@
-# *SOULeMESH*
+# SOULeMESH — Telegram matching prototype
 
+A Python Telegram bot prototype exploring conversations and matching based on shared interests and profile questionnaires. The repository name retains the earlier spelling `SOULeMASH`.
 
+## Components
 
+- `main.py`: bot flows, profile questionnaires, and matching logic.
+- `db.py`: PostgreSQL access using asyncpg.
+- `Chatgpt_wrapper.py`: OpenAI and Apify integration for profile analysis.
+- `listener.py`: a PostgreSQL notification listener for derived profile data.
+- `requirements.txt`: the original dependency list.
 
-SOULeMESH — это Telegram-бот нового поколения для знакомств и общения между старшеклассниками и студентами.
-Название — игра слов:
-казахское «сөйлемеш» — «не говори»
-английское Soul Mesh — «сеть душ»
-Главная идея — не оценивать людей по внешности, а находить тех, с кем вы действительно на одной волне.
-Как говорится: «Тең теңімен – тезек қабымен», но мы хотим переосмыслить это в современном ключе — ведь похожесть может быть не только по внешним признакам, но и по интересам, взглядам и внутреннему миру.
+## Configuration
 
-🔮 Что отличает SOULeMESH от других ботов:
+Credentials are read from environment variables. Copy `.env.example` to a local `.env` file and fill it with your own values. The application does not automatically load `.env`; export the values in your shell or configure them in your deployment environment.
 
-Анонимность и безопасность
-Поиск собеседников по интересам и психотипу
-Учёт количества сообщений и завершённых диалогов
-В скором времени — подбор по «вайбу» с помощью ИИ, анализ переписки и рекомендации
-📌 Технологии:
-Python + aiogram 3.x (Telegram Bot Framework)
-PostgreSQL + asyncpg (асинхронная база данных)
-Планируется интеграция с OpenAI GPT и Hugging Face
+| Variable | Used for |
+| --- | --- |
+| `BOT_TOKEN` | Your Telegram bot token |
+| `DATABASE_URL` | Your PostgreSQL connection URI |
+| `OPENAI_API_KEY` | Your OpenAI API key |
+| `APIFY_TOKEN` | Your Apify token for the analysis wrapper |
 
+Missing required values produce a configuration error. `.env` files are ignored by Git.
 
+## Status
 
-# *SOULeMESH*
+This is an earlier prototype, not a complete deployment package. The database schema and deployment configuration need to be established before running it. The listener imports a `DAI_L1` module that is not included, and the Docker startup configuration expects Supervisor, which is not listed in `requirements.txt`.
 
+Historical hardcoded credentials have been removed from the current files. Any previously exposed credentials must be revoked or rotated by their owner; removing them from the latest commit does not remove them from Git history.
 
-
-
-SOULeMESH is a next-generation Telegram bot designed to help high school and university students connect and make friends.
-The name is a play on words:
-
-The Kazakh “sөylemesh” — “don’t speak”
-The English Soul Mesh — “a network of souls”
-The core idea is not to judge based on appearance, but to find people who are truly on the same wavelength.
-As the Kazakh saying goes, “Teng teñimen – tezek qabimen,” though we aim to give it a modern twist — similarity can mean shared interests, values, and perspectives, not just outward traits.
-
-🔮 What makes SOULeMESH different:
-
-Ensures anonymity and safety
-Matches users by shared interests and personality type
-Tracks message counts and completed conversations
-Coming soon: AI-powered “vibe” matching, conversation analysis, and smart recommendations
-📌 Technology stack:
-Python + aiogram 3.x (Telegram Bot Framework)
-PostgreSQL + asyncpg (asynchronous database)
-Planned integration with OpenAI GPT and Hugging Face
+No security, privacy, psychological-assessment accuracy, or matching-quality validation is claimed by this repository.

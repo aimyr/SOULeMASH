@@ -1,3 +1,4 @@
+from settings import require_env
 import os, json, base64, requests
 from typing import Dict, List, Optional
 
@@ -9,8 +10,8 @@ import json, re
 
 
 # ==================== KEYS & CLIENTS ====================
-APIFY_TOKEN     = os.getenv("APIFY_TOKEN",  "apify_api_RAgg1rLfDSMylWYQT2jUotIVsdWVyZ1jRj1P")
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-5XBRs-SSoSScHCXPeRij8JvO_KXHT2mc_Y6n0e7M7qT3BlbkFJvyiweBPGWuzj_fLKGCPw8eKnVN2Scd5gUW7NLaEycA")
+APIFY_TOKEN = require_env("APIFY_TOKEN")
+OPENAI_API_KEY = require_env("OPENAI_API_KEY")
 
 apify  = ApifyClient(APIFY_TOKEN)
 openai = OpenAI(api_key=OPENAI_API_KEY)

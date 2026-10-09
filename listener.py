@@ -4,6 +4,7 @@
 user_profiles ──(TRIGGER→ NOTIFY)──▶ listener ──▶ user_embeddings
 """
 
+from settings import require_env
 import asyncio, asyncpg, json, traceback, re
 from datetime import datetime, timezone
 from functools import partial
@@ -12,7 +13,7 @@ from DAI_L1 import build_user_traits      # heavy-функция с OpenAI/Apify
 print = partial(print, flush=True)        # мгновенный вывод в Render-лог
 
 # ────────── конфиг ──────────
-DB_DSN       = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
+DB_DSN = require_env("DATABASE_URL")
 SOURCE_TABLE = "user_profiles"
 TARGET_TABLE = "user_embeddings"
 CHANNEL      = "profile_change"

@@ -1,3 +1,4 @@
+from settings import require_env
 import asyncio  # Добавлен импорт asyncio
 import numpy as np
 import logging
@@ -25,7 +26,7 @@ from aiogram.exceptions import TelegramForbiddenError
 import json
 import re
 # === OpenAI client setup ===
-OPENAI_API_KEY  = os.getenv("OPENAI_API_KEY", "sk-5XBRs-SSoSScHCXPeRij8JvO_KXHT2mc_Y6n0e7M7qT3BlbkFJvyiweBPGWuzj_fLKGCPw8eKnVN2Scd5gUW7NLaEycA")
+OPENAI_API_KEY = require_env("OPENAI_API_KEY")
 
 openai = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -81,7 +82,6 @@ from db import (
 )
 
 
-DATABASE_URL = "postgresql://soulemesh_user:8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7@dpg-d15jtare5dus739ot2ig-a.frankfurt-postgres.render.com/soulemesh"
 
 
 class Matchmaker:

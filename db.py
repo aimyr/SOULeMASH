@@ -1,15 +1,10 @@
+from settings import require_env
 import asyncpg
 import json
 from aiogram import types
 
 
-DB_CONFIG = {
-    "user": "soulemesh_user",
-    "password": "8WSKOXLXNY6xynha2bxdZRD9CHBfbDu7",
-    "database": "soulemesh",
-    "host": "dpg-d15jtare5dus739ot2ig-a",
-    "port": "5432"
-}
+DATABASE_URL = require_env("DATABASE_URL")
 
 async def save_user_profile(pool, user_id: int, profile_data: dict):
     async with pool.acquire() as conn:
@@ -36,7 +31,7 @@ async def check_user_profile_exists(pool, user_id: int) -> bool:
         result = await conn.fetchrow("SELECT 1 FROM user_profiles WHERE user_id = $1", user_id)
         return result is not None
 async def create_pool():
-    return await asyncpg.create_pool(**DB_CONFIG)
+    return await asyncpg.create_pool(dsn=DATABASE_URL)
 
 # Регистрация пользователя
 async def register_user(pool, user: types.User):
